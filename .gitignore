@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+.env
+.env.*
+*.env
+!.env.example
+coverage/
+*.log
+/research
+.opencode/

@@ -1,0 +1,35 @@
+name: Check
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - run: npm audit --omit=dev
+      - run: docker build -t keyfi-test .
+      - run: docker build -f deploy/Dockerfile.mongo -t keyfi-mongo-test .
+      - name: Check authenticated single-member bootstrap
+        shell: bash
+        run: |
+          docker run -d --name keyfi-mongo-check \
+            -e MONGO_INITDB_ROOT_USERNAME=test-admin \
+            -e MONGO_INITDB_ROOT_PASSWORD=ephemeral-test-root \
+            -e MONGO_APP_PASSWORD=ephemeral-test-app \
+            -e MONGO_REPLICA_HOST=localhost:27017 keyfi-mongo-test
+          for attempt in $(seq 1 40); do
+            if [ "$(docker inspect --format '{{.State.Health.Status}}' keyfi-mongo-check)" = healthy ]; then exit 0; fi
+            sleep 3
+          done
+          exit 1

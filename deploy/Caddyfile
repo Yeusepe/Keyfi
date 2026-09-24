@@ -1,0 +1,15 @@
+{
+  auto_https off
+  admin off
+  log {
+    output discard
+  }
+}
+:8080 {
+  reverse_proxy keyfi-a.zeabur.internal:8080 keyfi-b.zeabur.internal:8080 {
+    lb_policy least_conn
+    health_uri /health/ready
+    health_interval 10s
+    health_timeout 3s
+  }
+}

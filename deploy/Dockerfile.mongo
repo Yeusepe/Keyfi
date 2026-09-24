@@ -1,0 +1,7 @@
+FROM mongo:8.0.16
+COPY deploy/mongo-entrypoint.sh /opt/keyfi/entrypoint.sh
+COPY deploy/mongo-init.js /opt/keyfi/init.js
+RUN chmod 755 /opt/keyfi/entrypoint.sh
+ENTRYPOINT ["/opt/keyfi/entrypoint.sh"]
+CMD ["mongod", "--replSet", "rs0", "--keyFile", "/data/db/keyfi.key", "--bind_ip_all", "--auth", "--logpath", "/dev/null", "--setParameter", "diagnosticDataCollectionEnabled=false"]
+HEALTHCHECK --interval=10s --timeout=8s --start-period=30s CMD mongosh --quiet --file /opt/keyfi/init.js

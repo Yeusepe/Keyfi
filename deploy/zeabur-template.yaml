@@ -1,0 +1,94 @@
+# yaml-language-server: $schema=https://schema.zeabur.app/template.json
+# Replace both image paths with images built from this repository before import.
+apiVersion: zeabur.com/v1
+kind: Template
+metadata:
+  name: Keyfi
+spec:
+  description: Discord verification with two app instances and one MongoDB member.
+  variables:
+    - key: PUBLIC_DOMAIN
+      type: DOMAIN
+      name: Callback domain
+      description: Public HTTPS domain for Discord interactions and OAuth callbacks.
+    - key: PRIVACY_CONTACT
+      type: STRING
+      name: Privacy contact
+      description: Operator name and contact shown in the privacy notice, e.g. "Jane Doe, privacy@example.com".
+  services:
+    - name: mongodb
+      template: PREBUILT
+      spec:
+        source:
+          image: ghcr.io/REPLACE_ME/keyfi-mongo:0.1.0
+        env:
+          MONGO_REPLICA_HOST:
+            default: mongodb.zeabur.internal:27017
+          MONGO_INITDB_ROOT_USERNAME:
+            default: keyfi-admin
+        ports:
+          - id: database
+            port: 27017
+            type: TCP
+        portForwarding:
+          enabled: false
+        volumes:
+          - id: data
+            dir: /data/db
+    - name: keyfi-a
+      template: PREBUILT
+      dependencies: [mongodb]
+      spec: &application
+        source:
+          image: ghcr.io/REPLACE_ME/keyfi:0.1.0
+        env:
+          NODE_ENV:
+            default: production
+          PORT:
+            default: '8080'
+          BASE_URL:
+            default: https://${PUBLIC_DOMAIN}
+          PRIVACY_CONTACT:
+            default: ${PRIVACY_CONTACT}
+        ports:
+          - id: web
+            port: 8080
+            type: HTTP
+        healthCheck:
+          type: HTTP
+          port: web
+          http:
+            path: /health/ready
+    - name: keyfi-b
+      template: PREBUILT
+      dependencies: [mongodb]
+      spec: *application
+    - name: ingress
+      template: PREBUILT
+      dependencies: [keyfi-a, keyfi-b]
+      domainKey: PUBLIC_DOMAIN
+      spec:
+        source:
+          image: caddy:2.10.2-alpine
+        ports:
+          - id: web
+            port: 8080
+            type: HTTP
+        configs:
+          - path: /etc/caddy/Caddyfile
+            template: |
+              {
+                auto_https off
+                admin off
+                log {
+                  output discard
+                }
+              }
+              :8080 {
+                reverse_proxy keyfi-a.zeabur.internal:8080 keyfi-b.zeabur.internal:8080 {
+                  lb_policy least_conn
+                  health_uri /health/ready
+                  health_interval 10s
+                  health_timeout 3s
+                }
+              }

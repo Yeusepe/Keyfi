@@ -1,0 +1,29 @@
+services:
+  mongodb:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:?Set MongoDB root username}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?Set MongoDB root password}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD:?Set application database password}
+      MONGO_REPLICA_HOST: mongodb:27017
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "127.0.0.1:27017:27017"
+    restart: unless-stopped
+  app:
+    build: .
+    env_file: ${KEYFI_ENV_FILE:-.env}
+    environment:
+      NODE_ENV: production
+      MONGODB_URI: mongodb://keyfi:${MONGO_APP_PASSWORD}@mongodb:27017/keyfi?replicaSet=rs0&authSource=keyfi
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  mongo-data:
