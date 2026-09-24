@@ -156,7 +156,8 @@ export class Service {
     const roles = new Set(check.roles);
     const match = matches[0];
     if (match) {
-      const e = await this.providers.readReference(store, match.referenceId, match.membership);
+      const {referenceId} = JSON.parse(await this.secrets.open(match.reference,match._id)) as {referenceId:string};
+      const e = await this.providers.readReference(store, referenceId, match.membership);
       if (e.eligibility === 'unknown') throw new Failure('unknown');
       if (e.buyerHash === buyerHash && e.eligibility === 'eligible' && this.roles(panel,e).length) {
         try { for (const role of await this.claim(panel, discordId, e, epoch)) roles.add(role); }

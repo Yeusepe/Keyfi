@@ -6,6 +6,7 @@ import type { Service } from './service.js';
 import { nextCheck } from './service.js';
 import { Failure, id, logFailure, safeCode } from './security.js';
 import type { Store, Lookup, AccountCheck } from './model.js';
+import { encryptedLookup } from './purchase-storage.js';
 
 const retryAt = (e: unknown) => new Date(Date.now() + ((e instanceof Failure && e.retryAfter ? e.retryAfter : 60) + Math.random()*10) * 1000);
 export class Jobs {
@@ -81,7 +82,7 @@ export class Jobs {
     for (const hint of await this.db.hints.find({nextAt: {$lte: new Date()}}).limit(2).toArray()) {
       try {
         const store = await this.store(hint.storeId);
-        const e = await this.service.providers.readReference(store,hint.referenceId,hint.membership,true);
+        const e = await this.service.providers.readReference(store,await this.service.secrets.open(hint.reference,hint._id),hint.membership,true);
         if (!await this.db.panels.findOne({[`stores.${store.provider}`]:store._id,'mappings.productId':e.productId})) throw new Failure('unmapped_product');
         if (this.service.buyerOAuthEnabled) await this.upsertLookups([{_id:`${store._id}:${e.entitlementId}`,storeId:store._id,productId:e.productId,referenceId:e.referenceId,saleId:e.saleId,membership:e.membership,buyerHash:e.buyerHash}]);
         await this.db.claims.updateOne({_id:await this.service.secrets.hash('claim',store._id,e.entitlementId)},{$set:{nextCheckAt:new Date()}});
@@ -150,7 +151,10 @@ export class Jobs {
       await this.db.db.collection('privacy_fence').updateOne({_id:'index' as never},{$inc:{revision:1}},{upsert:true,session});
       const hashes=records.flatMap(r=>r.buyerHash?[r.buyerHash]:[]);
       const optedOut=new Set((await this.db.optouts.find({_id:{$in:hashes}},{session}).toArray()).map(r=>r._id));
-      const writes=records.filter(r=>!r.buyerHash||!optedOut.has(r.buyerHash)).map(({_id,...fields})=>({updateOne:{filter:{_id},update:{$set:fields},upsert:true}}));
+      const writes=await Promise.all(records.filter(r=>!r.buyerHash||!optedOut.has(r.buyerHash)).map(async record=>{
+        const {_id,...fields}=await encryptedLookup(record,this.service.secrets);
+        return {updateOne:{filter:{_id},update:{$set:fields},upsert:true}};
+      }));
       if(writes.length) await this.db.lookups.bulkWrite(writes,{session});
     });
   }

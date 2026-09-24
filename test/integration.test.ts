@@ -15,6 +15,7 @@ import { Limits, createRequester } from '../src/http.js';
 import { createServer } from '../src/server.js';
 import { closeDocument, closeScript, closeScriptHash, createAuthentication } from '../src/auth.js';
 import { Jobs } from '../src/jobs.js';
+import { migratePurchaseData } from '../src/purchase-storage.js';
 import { DiscordApi, panelMessage, type DiscordPort } from '../src/discord.js';
 import type { Entitlement, Panel, Store } from '../src/model.js';
 import { Interactions, interactionSchema, type Interaction } from '../src/interactions.js';
@@ -119,7 +120,7 @@ test('admin modals check current permissions and panel ownership before opening'
 });
 test('without Gumroad sign-in no buyer index is built or kept',async()=>{
   const off=new Service(db,service.providers,discord,secrets,false);
-  await db.lookups.insertOne({_id:'old',storeId:'store',productId:'product',referenceId:'sale-1',membership:false,buyerHash:'hash'});
+  await new Jobs({} as any,db,service,discord as any).upsertLookups([{_id:'old',storeId:'store',productId:'product',referenceId:'sale-1',membership:false,buyerHash:'hash'}]);
   await db.sync.insertOne({_id:'store:old',panelId:'panel',storeId:'store',productId:'old',membership:false,initialComplete:true,startedAt:new Date(),nextAt:new Date()});
   await off.addMapping(panel,{...panel.mappings[0]!,productId:'new'});
   assert.equal(await db.sync.countDocuments({productId:'new'}),0);
@@ -818,8 +819,8 @@ test('purchase scan processes successive pages promptly and enables every publis
 test('purchase scan preserves its cursor on failure, shows progress, and resumes without duplicate records',async()=>{
   await service.reconcileIndex();
   await db.sync.updateMany({},{$set:{cursor:'page-2'}});
-  await db.lookups.insertOne({_id:'first',storeId:store._id,productId:'product',referenceId:'first',membership:false});
   const h=ui(),jobs=new Jobs({} as any,db,service,h.api as any);
+  await jobs.upsertLookups([{_id:'first',storeId:store._id,productId:'product',referenceId:'first',membership:false}]);
   service.providers.indexPage=async()=>{throw new Failure('rate_limited',120);};
   await jobs.index();
   let scan=(await db.sync.findOne({storeId:store._id}))!;
@@ -968,10 +969,13 @@ test('webhooks only enqueue bounded hints and cannot grant roles',async()=>{
   try{
     const response=await app.inject({method:'POST',url:'/webhooks/gumroad/'+token,payload:{sale_id:'sale-1',seller_id:'creator',product_id:'product',email:'CANARY-EMAIL',license_key:'CANARY-KEY',refunded:false}});
     assert.equal(response.statusCode,202);assert.equal(await db.hints.countDocuments(),1);assert.equal(await db.claims.countDocuments(),0);
-    assert.ok(!JSON.stringify(await db.hints.find().toArray()).includes('CANARY'));
+    const saved=(await db.hints.findOne())!;
+    assert.ok(!JSON.stringify(saved).includes('sale-1'));
+    assert.ok(!JSON.stringify(saved).includes('CANARY'));
+    assert.equal(await secrets.open(saved.reference,saved._id),'sale-1');
     await app.inject({method:'POST',url:'/webhooks/gumroad/'+token,payload:{sale_id:'sale-1',seller_id:'creator',product_id:'product',resource_name:'refund'}});
     assert.equal(await db.hints.countDocuments(),1);assert.equal((await db.hints.findOne())?.pings,2);
-    await db.hints.insertMany(Array.from({length:99},(_,n)=>({_id:`h${n}`,storeId:'store',referenceId:`r${n}`,membership:false,pings:1,nextAt:new Date(),expiresAt:new Date(Date.now()+60_000)})));
+    await db.hints.insertMany(await Promise.all(Array.from({length:99},async(_,n)=>({_id:`h${n}`,storeId:'store',reference:await secrets.seal(`r${n}`,`h${n}`),membership:false,pings:1,nextAt:new Date(),expiresAt:new Date(Date.now()+60_000)}))));
     assert.equal((await app.inject({method:'POST',url:'/webhooks/gumroad/'+token,payload:{sale_id:'sale-2',product_id:'product'}})).statusCode,503);
   }finally{await app.close();}
 });
@@ -984,7 +988,7 @@ test('a ping during processing keeps its hint for another read, and hooks regist
     return {success:true,sale:{id:'sale-1',seller_id:'creator',product_id:'product',chargedback:false,access_revoked:false}};
   };
   const jobs=new Jobs({BASE_URL:'https://keyfi.example'} as any,db,service,discord as any);
-  await db.hints.insertOne({_id:'hint',storeId:'store',referenceId:'sale-1',membership:false,pings:1,nextAt:new Date(),expiresAt:new Date(Date.now()+60_000)});
+  await db.hints.insertOne({_id:'hint',storeId:'store',reference:await secrets.seal('sale-1','hint'),membership:false,pings:1,nextAt:new Date(),expiresAt:new Date(Date.now()+60_000)});
   await jobs.providers();assert.equal(await db.hints.countDocuments(),1);
   await jobs.providers();assert.equal(await db.hints.countDocuments(),0);
   await jobs.registerHooks((await db.stores.findOne({_id:'store'}))!);
@@ -1029,14 +1033,15 @@ test('a new role cannot be granted from stale ownership or an unknown recheck',a
 test('account checks resume at the next entitlement instead of rescanning purchases',async()=>{
   const hash=await secrets.hash('gumroad-buyer','store','buyer');
   await db.sync.insertOne({_id:'sync',panelId:'panel',storeId:'store',productId:'product',membership:false,initialComplete:true,startedAt:new Date(),nextAt:new Date(Date.now()+60_000)});
-  for(const n of [1,2])await db.lookups.insertOne({_id:`lookup${n}`,storeId:'store',productId:'product',referenceId:`sale${n}`,membership:false,buyerHash:hash});
+  const jobs=new Jobs({} as any,db,service,discord as any);
+  await jobs.upsertLookups([1,2].map(n=>({_id:`lookup${n}`,storeId:'store',productId:'product',referenceId:`sale${n}`,membership:false,buyerHash:hash})));
   const calls:string[]=[];
   service.providers.readReference=async(_s:Store,id:string)=>{calls.push(id);return {...entitlement(),buyerHash:hash,referenceId:id,entitlementId:id};};
   await service.queueAccount(panel,'111',hash,'token');
   const c=db.db.collection<any>('account_checks');
   const first=await service.accountStep((await c.findOne())!);assert.equal(first.done,false);
   await c.updateOne({},{$set:{cursor:first.cursor,roles:first.roles}});
-  const second=await service.accountStep((await c.findOne())!);assert.deepEqual(calls,['sale1','sale2']);assert.equal(second.done,false);
+  const second=await service.accountStep((await c.findOne())!);assert.deepEqual(calls.sort(),['sale1','sale2']);assert.equal(second.done,false);
   await c.updateOne({},{$set:{cursor:second.cursor,roles:second.roles}});
   assert.equal((await service.accountStep((await c.findOne())!)).done,true);
 });
@@ -1078,6 +1083,27 @@ test('stored buyer data never contains a readable Discord ID or purchase ID',asy
   // An encrypted Discord ID copied onto another member cannot be opened there.
   const member=(await db.members.findOne({_id:await memberOf(discordId)}))!;
   await assert.rejects(secrets.open(member.discord!,await guildOf('111')));
+});
+
+test('lookup rows encrypt purchase and sale IDs, and migration converts old rows',async()=>{
+  const jobs=new Jobs({} as any,db,service,discord as any);
+  const record={_id:'store:license:LOOKUP-CANARY',storeId:'store',productId:'product',referenceId:'REFERENCE-CANARY',saleId:'SALE-CANARY',membership:false,buyerHash:'buyer-hash'};
+  await jobs.upsertLookups([record]);
+  const saved=(await db.lookups.findOne())!;
+  for(const canary of ['LOOKUP-CANARY','REFERENCE-CANARY','SALE-CANARY']) assert.ok(!JSON.stringify(saved).includes(canary),canary);
+  assert.deepEqual(JSON.parse(await secrets.open(saved.reference,saved._id)),{referenceId:record.referenceId,saleId:record.saleId});
+  await db.db.collection('lookups').insertOne({...record,_id:'legacy:LOOKUP-CANARY'});
+  await db.optouts.insertOne({_id:'erased-buyer',createdAt:new Date()});
+  await db.db.collection('lookups').insertOne({...record,_id:'legacy:erased',buyerHash:'erased-buyer'});
+  await db.db.collection('hints').insertOne({_id:'old-hint',storeId:'store',referenceId:'HINT-CANARY',membership:false,pings:1,nextAt:new Date(),expiresAt:new Date(Date.now()+60_000)});
+  await migratePurchaseData(db,secrets);
+  await migratePurchaseData(db,secrets);
+  assert.equal(await db.lookups.countDocuments(),2);
+  assert.equal(await db.db.collection('lookups').countDocuments({referenceId:{$exists:true}}),0);
+  assert.equal(await db.db.collection('hints').countDocuments({referenceId:{$exists:true}}),0);
+  assert.equal(await secrets.open((await db.hints.findOne({_id:'old-hint'}))!.reference,'old-hint'),'HINT-CANARY');
+  for(const canary of ['LOOKUP-CANARY','REFERENCE-CANARY','SALE-CANARY','HINT-CANARY'])
+    assert.ok(!JSON.stringify([await db.lookups.find().toArray(),await db.hints.find().toArray()]).includes(canary),canary);
 });
 
 test('startup rejects legacy encryption before it can mix incompatible records',async()=>{

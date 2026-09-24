@@ -10,6 +10,7 @@ import { createAuthentication } from './auth.js';
 import { Interactions } from './interactions.js';
 import { createServer } from './server.js';
 import { Jobs } from './jobs.js';
+import { migratePurchaseData } from './purchase-storage.js';
 
 // Last-resort failures must never dump request objects or credential-bearing URLs.
 const fatal=()=>{process.stderr.write('keyfi_fatal\n');process.exit(1);};
@@ -21,6 +22,7 @@ async function main() {
   const client=await new MongoClient(c.MONGODB_URI,{maxPoolSize:20,serverSelectionTimeoutMS:2000,connectTimeoutMS:2000,socketTimeoutMS:15_000}).connect();
   const secrets=await createSecrets(client,c.MONGODB_DATABASE,c.ENCRYPTION_KEY);
   const db=new Database(client,c.MONGODB_DATABASE); await db.initialize();
+  await migratePurchaseData(db,secrets);
   const limits=new Limits(db);
   const providers=new Providers(createRequester(db,secrets,limits),secrets,(storeId,productId)=>db.catalog.findOne({storeId,productId}));
   const discord=new DiscordApi(c.DISCORD_BOT_TOKEN,c.DISCORD_APPLICATION_ID);

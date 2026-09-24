@@ -50,6 +50,7 @@ export interface Lookup {
   _id: string; storeId: string; productId: string; referenceId: string;
   saleId?: string; membership: boolean; buyerHash?: string;
 }
+export interface StoredLookup extends Omit<Lookup, 'referenceId' | 'saleId'> { reference: string; }
 export interface CatalogProduct {
   _id: string; storeId: string; productId: string; name: string;
   nameKey: string;

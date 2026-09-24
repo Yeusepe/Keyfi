@@ -1,6 +1,6 @@
 import { MongoClient, type ClientSession, type Collection } from 'mongodb';
 import { Failure, id } from './security.js';
-import type { Action, Binding, CatalogJob, CatalogProduct, Claim, Flow, Lookup, Member, Panel, SetupView, Store, Subject, Sync } from './model.js';
+import type { Action, Binding, CatalogJob, CatalogProduct, Claim, Flow, Member, Panel, SetupView, Store, StoredLookup, Subject, Sync } from './model.js';
 
 export class Database {
   db;
@@ -9,7 +9,7 @@ export class Database {
   leases: Collection<{_id: string; owner: string; expiresAt: Date}>;
   events: Collection<{_id: string; expiresAt: Date}>;
   optouts: Collection<{_id: string; createdAt: Date}>;
-  hints: Collection<{_id: string; storeId: string; referenceId: string; membership: boolean; pings: number; nextAt: Date; expiresAt: Date}>;
+  hints: Collection<{_id: string; storeId: string; reference: string; membership: boolean; pings: number; nextAt: Date; expiresAt: Date}>;
   cooldowns: Collection<{_id: string; until: Date}>;
   constructor(public client: MongoClient, name: string) {
     this.db = client.db(name);
@@ -19,7 +19,7 @@ export class Database {
     this.bindings = this.db.collection<Binding>('bindings');
     this.members = this.db.collection<Member>('members');
     this.subjects = this.db.collection<Subject>('subjects');
-    this.lookups = this.db.collection<Lookup>('lookups');
+    this.lookups = this.db.collection<StoredLookup>('lookups');
     this.catalog = this.db.collection<CatalogProduct>('catalog');
     this.flows = this.db.collection<Flow>('flows');
     this.actions = this.db.collection<Action>('actions');

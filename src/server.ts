@@ -78,7 +78,7 @@ export function createServer(c: Config, db: Database, interactions: Interactions
     const key=await secrets.hash('hint',store._id,membership?'subscription':'sale',referenceId);
     // Pings are unordered triggers: one hint per sale/subscription. Each ping bumps
     // `pings`, so a refund arriving mid-read forces one more read of current state.
-    await db.hints.updateOne({_id:key},{$set:{nextAt:new Date()},$inc:{pings:1},$setOnInsert:{storeId:store._id,referenceId,membership,expiresAt:new Date(Date.now()+86400_000)}},{upsert:true});
+    await db.hints.updateOne({_id:key},{$set:{nextAt:new Date()},$inc:{pings:1},$setOnInsert:{storeId:store._id,reference:await secrets.seal(referenceId,key),membership,expiresAt:new Date(Date.now()+86400_000)}},{upsert:true});
     return reply.code(202).send();
   });
   app.register(auth.register);
