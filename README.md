@@ -44,7 +44,7 @@ Keyfi encrypts saved purchase references, store credentials, tokens, and member 
 
 Purchase lookup document IDs are keyed hashes, and webhook hints store encrypted references. Startup migrates older plaintext lookup and hint rows before serving requests.
 
-Generate `ENCRYPTION_KEY` once using the command in `.env.example`. Set the same value on every app instance (both `keyfi-a` and `keyfi-b` on Zeabur), keep it across restarts, and back it up separately from MongoDB. Losing or replacing it makes existing encrypted records and buyer codes unusable. No external key service is required.
+Generate `ENCRYPTION_KEY` once using the command in `.env.example`. Set the same value on every app instance (both `keyfi-a` and `keyfi-b` on Zeabur), keep it across restarts, and back it up separately from MongoDB. Losing or replacing it makes existing encrypted records and buyer codes unusable. The first startup records a fingerprint of the key in the `meta` collection; an instance started with a different key refuses to start. No external key service is required.
 
 Previous KMS/CSFLE records and buyer codes are incompatible with this format. Startup refuses databases containing the old `__keyVault`; existing installations must migrate before switching. Keep the old keys and database backup until that migration is complete.
 

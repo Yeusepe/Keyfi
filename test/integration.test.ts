@@ -1153,6 +1153,11 @@ test('startup rejects legacy encryption before it can mix incompatible records',
   await assert.rejects(createSecrets(client,'keyfi_test','07'.repeat(32)),{message:'legacy_encryption_requires_migration'});
   assert.equal(await db.db.collection('__keyVault').countDocuments(),1);
 });
+test('startup refuses an encryption key that differs from the one the database was started with',async()=>{
+  await createSecrets(client,'keyfi_test','07'.repeat(32));
+  await createSecrets(client,'keyfi_test','07'.repeat(32));
+  await assert.rejects(createSecrets(client,'keyfi_test','08'.repeat(32)),{message:'encryption_key_mismatch'});
+});
 test('job loops run on one instance at a time, drain on stop, and release their leases',async()=>{
   const make=()=>new Jobs({} as any,db,service,{...discord,call:async()=>[{id:panel.guildId}]} as any);
   const a=make(),b=make();let active=0,peak=0,runs=0;

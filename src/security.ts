@@ -34,6 +34,10 @@ export class Secrets {
 export async function createSecrets(client: MongoClient, database: string, key: string): Promise<Secrets> {
   const secrets = new Secrets(key);
   if (await client.db(database).collection('__keyVault').findOne({})) throw new Failure('legacy_encryption_requires_migration');
+  const check = await secrets.hash('key-check');
+  const saved = await client.db(database).collection<{_id: string; check: string}>('meta')
+    .findOneAndUpdate({_id: 'encryption'}, {$setOnInsert: {check}}, {upsert: true, returnDocument: 'after'});
+  if (saved?.check !== check) throw new Failure('encryption_key_mismatch');
   return secrets;
 }
 export function same(a: string, b: string): boolean {
