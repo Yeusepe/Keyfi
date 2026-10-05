@@ -111,10 +111,12 @@ export class Jobs {
     for(const task of await this.db.catalogJobs.find({nextAt:{$lte:new Date()}}).sort({nextAt:1}).limit(1).toArray()) {
       try {
         await this.db.catalogJobs.updateOne({_id:task._id},{$set:{syncing:true}});
-        const page = await this.service.providers.catalogPage(await this.store(task._id),task.page);
+        const page = await this.service.providers.catalogPage(await this.store(task._id),task.page,task.cursor);
+        if(page.cursor && page.cursor===task.cursor) throw new Failure('provider_schema');
         for(const product of page.products) { const {_id,...rest}=product; await this.db.catalog.updateOne({_id},{$set:rest},{upsert:true}); }
         await this.db.catalogJobs.updateOne({_id:task._id},{$set:{page:page.more?task.page+1:1,syncing:page.more,
-          nextAt:new Date(Date.now()+(page.more?15_000:6*3600_000))},$unset:{error:''}});
+          nextAt:new Date(Date.now()+(page.more?15_000:6*3600_000)),...(page.cursor?{cursor:page.cursor}:{})},
+          $unset:{error:'',...(!page.cursor?{cursor:''}:{})}});
       } catch(e) {
         if(e instanceof Failure && e.code==='store_disconnected') await this.db.catalogJobs.deleteOne({_id:task._id});
         else await this.db.catalogJobs.updateOne({_id:task._id},{$set:{nextAt:retryAt(e),error:safeCode(e)}});

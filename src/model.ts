@@ -79,7 +79,7 @@ export interface Sync {
 }
 export interface CatalogJob {
   _id: string; page: number; nextAt: Date; syncing: boolean; error?: string;
-  manualAfter?: Date;
+  cursor?: string; manualAfter?: Date;
 }
 export interface SetupView {
   _id: string; discordId: string; guildId: string; channelId?: string;

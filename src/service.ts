@@ -51,7 +51,7 @@ export class Service {
         if (!(await this.db.stores.updateOne({_id: storeId, status: 'active', administrator: discordId}, {$inc: {revision: 1}}, {session})).matchedCount) throw new Failure('store_disconnected');
         const job = await this.db.catalogJobs.findOne({_id: storeId}, {session});
         if (job?.syncing || (job?.manualAfter && job.manualAfter > now)) continue;
-        await this.db.catalogJobs.updateOne({_id: storeId}, {$set: {page: 1, nextAt: now, syncing: true, manualAfter: new Date(now.getTime()+60_000)}, $unset: {error: ''}}, {upsert: true, session});
+        await this.db.catalogJobs.updateOne({_id: storeId}, {$set: {page: 1, nextAt: now, syncing: true, manualAfter: new Date(now.getTime()+60_000)}, $unset: {error: '',cursor:''}}, {upsert: true, session});
         const products = current.mappings.filter(m => current.stores[m.provider]===storeId).map(m => m.productId);
         await this.db.sync.updateMany({storeId, productId: {$in: products}, initialComplete: true, cursor: {$exists: false}}, {$min: {nextAt: now}}, {session});
         queued = true;

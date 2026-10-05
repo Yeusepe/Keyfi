@@ -312,6 +312,25 @@ test('connecting shared stores automatically queues one catalog sync and preserv
   const scheduled=await db.catalogJobs.findOne({_id:storeId});
   assert.equal(scheduled?.syncing,false);assert.ok(scheduled!.nextAt.getTime()>Date.now()+5*3600000);
 });
+test('Gumroad catalog sync follows the next page to older products',async()=>{
+  const calls:(string|undefined)[]=[];
+  service.providers.request=async(_store,path,query)=>{
+    assert.equal(path,'/products');calls.push(query?.page_key);
+    return query?.page_key ? {success:true,products:[{id:'vrcphone',name:'Interactive VRCPhone'}]} :
+      {success:true,products:Array.from({length:10},(_,i)=>({id:`recent-${i}`,name:`Recent ${i}`})),next_page_key:'page-2'};
+  };
+  await db.catalogJobs.insertOne({_id:store._id,page:1,nextAt:new Date(),syncing:true});
+  const jobs=new Jobs({} as any,db,service,discord as any);
+  await jobs.providers();
+  assert.equal(await db.catalog.countDocuments(),10);
+  assert.equal((await db.catalogJobs.findOne({_id:store._id}))?.cursor,'page-2');
+  await db.catalogJobs.updateOne({_id:store._id},{$set:{nextAt:new Date()}});
+  await jobs.providers();
+  assert.deepEqual(calls,[undefined,'page-2']);
+  assert.equal((await db.catalog.findOne({productId:'vrcphone'}))?.name,'Interactive VRCPhone');
+  const done=await db.catalogJobs.findOne({_id:store._id});
+  assert.equal(done?.syncing,false);assert.equal(done?.cursor,undefined);
+});
 test('setup progress updates the same private message only when changed and stops after navigation',async()=>{
   const h=ui();await h.interactions.settings(h.input(),panel);
   const view=await db.setupViews.findOne({_id:panel._id});assert.ok(view);
@@ -331,12 +350,12 @@ test('setup progress updates the same private message only when changed and stop
 
 test('manual store sync coalesces across instances, preserves cursors, and uses the background queue',async()=>{
   const future=new Date(Date.now()+3600_000), after='2026-09-01';
-  await db.catalogJobs.insertOne({_id:store._id,page:1,nextAt:future,syncing:false});
+  await db.catalogJobs.insertOne({_id:store._id,page:1,cursor:'old-page',nextAt:future,syncing:false});
   await db.sync.insertOne({_id:'sync',panelId:panel._id,storeId:store._id,productId:'product',membership:false,initialComplete:true,after,startedAt:new Date(),nextAt:future});
   const second=new Service(db,service.providers,discord,secrets);
   const results=await Promise.all([service.syncStores(panel._id,'123'),second.syncStores(panel._id,'123')]);
   assert.equal(results.filter(Boolean).length,1);
-  let queued=await db.catalogJobs.findOne({_id:store._id});assert.equal(queued?.syncing,true);
+  let queued=await db.catalogJobs.findOne({_id:store._id});assert.equal(queued?.syncing,true);assert.equal(queued?.cursor,undefined);
   assert.ok(queued!.nextAt<future);assert.equal(await db.catalogJobs.countDocuments(),1);
   const sync=await db.sync.findOne({_id:'sync'});assert.equal(sync?.after,after);assert.ok(sync!.nextAt<future);
   await db.catalogJobs.updateOne({_id:store._id},{$set:{page:3,nextAt:future,error:'rate_limited'}});

@@ -123,11 +123,11 @@ export class Gumroad implements StoreAdapter {
   }
   readReference(store:Store,referenceId:string,membership=false,background=false) { return membership?this.membership(store,referenceId,undefined,background):this.sale(store,referenceId,background); }
   recheck(store:Store,e:Entitlement,background=true) { return e.membership?this.membership(store,e.referenceId,e,background):this.sale(store,e.referenceId,background); }
-  async catalogPage(store: Store): Promise<{products:Omit<CatalogProduct,'nameKey'>[];more:boolean}> {
-      const raw = parse(z.object({success: z.literal(true), products: z.array(z.object({id: sid, name: z.string(), is_recurring_billing: z.boolean().optional(), is_licensed: z.boolean().optional(), variants: z.array(z.object({title: z.string(), options: z.array(z.object({name: z.string()}))})).optional()}))}), await this.request(store, '/products', {}, {background:true}));
+  async catalogPage(store: Store, _page=1, cursor?: string): Promise<{products:Omit<CatalogProduct,'nameKey'>[];more:boolean;cursor?:string}> {
+      const raw = parse(z.object({success: z.literal(true), products: z.array(z.object({id: sid, name: z.string(), is_recurring_billing: z.boolean().optional(), is_licensed: z.boolean().optional(), variants: z.array(z.object({title: z.string(), options: z.array(z.object({name: z.string()}))})).optional()})), next_page_key: z.string().optional()}), await this.request(store, '/products', cursor?{page_key:cursor}:{}, {background:true}));
       return {products: raw.products.map(p => ({_id: `${store._id}:${p.id}`, storeId: store._id, productId: p.id, name: p.name,
         membership: !!p.is_recurring_billing, licensed: !!p.is_licensed,
-        variants: p.variants?.length === 1 ? p.variants[0]!.options.map(v => ({id: variantKey({[p.variants![0]!.title]: v.name}), name: v.name})) : [], fetchedAt: new Date()})), more: false};
+        variants: p.variants?.length === 1 ? p.variants[0]!.options.map(v => ({id: variantKey({[p.variants![0]!.title]: v.name}), name: v.name})) : [], fetchedAt: new Date()})), more: !!raw.next_page_key, cursor:raw.next_page_key};
   }
   async versions(_store:Store,product:CatalogProduct) { return product.variants; }
   async indexPage(store: Store, productId: string, membership: boolean, cursor?: string, after?: string): Promise<{records: Lookup[]; cursor?: string}> {

@@ -47,8 +47,8 @@ export class Providers {
   }
   async readReference(store:Store,referenceId:string,membership=false,background=false) { return this.checked(store,await this.get(store.provider).readReference(store,referenceId,membership,background)); }
   async recheck(store:Store,e:Entitlement,background=true) { return this.checked(store,await this.get(store.provider).recheck(store,e,background)); }
-  async catalogPage(store:Store,page=1) {
-    const result=await this.get(store.provider).catalogPage(store,page);
+  async catalogPage(store:Store,page=1,cursor?:string) {
+    const result=await this.get(store.provider).catalogPage(store,page,cursor);
     return {...result,products:result.products.map(p=>({...p,nameKey:productNameKey(p.name)}))};
   }
   versions(store:Store,product:CatalogProduct) { return this.get(store.provider).versions(store,product); }
