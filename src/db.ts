@@ -11,6 +11,7 @@ export class Database {
   optouts: Collection<{_id: string; createdAt: Date}>;
   hints: Collection<{_id: string; storeId: string; reference: string; membership: boolean; pings: number; nextAt: Date; expiresAt: Date}>;
   cooldowns: Collection<{_id: string; until: Date}>;
+  revocations: Collection<{_id: string; storeId: string; reason: 'refund' | 'manual'; createdAt: Date}>;
   constructor(public client: MongoClient, name: string) {
     this.db = client.db(name);
     this.stores = this.db.collection<Store>('stores');
@@ -31,14 +32,17 @@ export class Database {
     this.optouts = this.db.collection('optouts');
     this.hints = this.db.collection('hints');
     this.cooldowns = this.db.collection('cooldowns');
+    this.revocations = this.db.collection('revocations');
   }
   async initialize() {
     const hello = await this.db.command({hello: 1});
     if (!hello.setName) throw new Error('MongoDB must be configured as a replica set (one member is sufficient)');
     await Promise.all([
       this.stores.createIndex({provider: 1, ownerId: 1}, {unique: true}),
+      this.stores.createIndex({credentialHash: 1}, {unique: true, sparse: true}),
       this.panels.createIndex({guildId: 1}),
       this.claims.createIndex({nextCheckAt: 1}), this.claims.createIndex({subject: 1}), this.claims.createIndex({storeId: 1}),
+      this.revocations.createIndex({storeId: 1}),
       this.bindings.createIndex({panelId: 1, claimId: 1}, {unique: true}),
       this.bindings.createIndex({guildId: 1, subject: 1}), this.bindings.createIndex({subject: 1}),
       this.members.createIndex({dirty: 1}), this.members.createIndex({subject: 1}),

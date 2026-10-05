@@ -5,6 +5,9 @@ export interface Store {
   administrator: string; status: 'active' | 'disconnecting';
   webhookHash?: string; webhookPending?: boolean;
   webhookToken?: string;
+  webhookReceivedAt?: Date;
+  webhookReview?: boolean;
+  credentialHash?: string;
   webhookResources?: string[]; removedResources?: string[];
   createdAt: Date; revision?: number;
   termsVersion?: string; termsAcceptedAt?: Date;
@@ -31,7 +34,7 @@ export interface Entitlement {
 // Stored claims hold purchase identifiers only inside the encrypted `reference`, and
 // the buyer only as `subject`, a one-way code of their Discord ID.
 export interface Claim extends Omit<Entitlement, 'entitlementId' | 'referenceId' | 'saleId'> {
-  _id: string; subject: string; reference: string; nextCheckAt: Date;
+  _id: string; subject: string; reference: string; nextCheckAt?: Date;
 }
 export interface Binding {
   _id: string; claimId: string; panelId: string; guildId: string; subject: string;
@@ -55,6 +58,7 @@ export interface CatalogProduct {
   nameKey: string;
   membership: boolean; licensed: boolean; variants: {id: string; name: string}[];
   fetchedAt: Date;
+  credential?: string;
 }
 export interface Flow {
   _id: string; kind: 'buyer' | 'creator'; panelId: string; guildId: string; channelId?: string; discordId: string;

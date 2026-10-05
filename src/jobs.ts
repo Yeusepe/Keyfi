@@ -197,6 +197,7 @@ export class Jobs {
           if(await this.db.panels.findOne({[`stores.${store.provider}`]:store._id},{session})) return;
           await this.db.lookups.deleteMany({storeId:store._id},{session});
           await this.db.catalog.deleteMany({storeId:store._id},{session});
+          await this.db.revocations.deleteMany({storeId:store._id},{session});
           // Roles were recorded in members before bindings were removed, so
           // deletion of the credential cannot orphan pending role cleanup.
           await this.db.claims.deleteMany({storeId:store._id},{session});
@@ -210,6 +211,7 @@ export class Jobs {
             await this.db.stores.deleteOne({_id:store._id,status:'disconnecting'},{session});
             await this.db.lookups.deleteMany({storeId:store._id},{session});
             await this.db.catalog.deleteMany({storeId:store._id},{session});
+            await this.db.revocations.deleteMany({storeId:store._id},{session});
             await this.db.claims.deleteMany({storeId:store._id},{session});
             await this.db.hints.deleteMany({storeId:store._id},{session});
           });

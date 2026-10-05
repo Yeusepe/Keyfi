@@ -20,6 +20,8 @@ import { DiscordApi, panelMessage, type DiscordPort } from '../src/discord.js';
 import type { Entitlement, Panel, Store } from '../src/model.js';
 import { Interactions, interactionSchema, type Interaction } from '../src/interactions.js';
 import { ButtonStyle, MessageFlags, PermissionFlagsBits } from 'discord.js';
+import { TERMS_VERSION } from '../src/notices.js';
+import { payhipLicenseHash, receivePayhip } from '../src/stores/payhip.js';
 
 let mongo:MongoMemoryReplSet,client:MongoClient,db:Database,service:Service;
 let secrets:Secrets;
@@ -193,7 +195,7 @@ test('buyers get a private, complete copy of their data and anyone can read the 
     assert.equal((prepared.response as any).type,4);assert.equal(prepared.work,undefined);
     assert.ok(json.includes(title));assert.ok(json.includes('Test Operator, privacy@example.com'));
   }
-  assert.ok(JSON.stringify(buyer.response).includes('never keeps'));assert.ok(JSON.stringify(creator.response).includes('Data terms (v1)'));
+  assert.ok(JSON.stringify(buyer.response).includes('never keeps'));assert.ok(JSON.stringify(creator.response).includes(`Data terms (v${TERMS_VERSION})`));
   await assert.rejects(h.interactions.prepare(h.input({member,data:{name:'keyfi',options:[{name:'privacy'}]}})),{message:'admin_required'});
 });
 test('private navigation edits the current message and public license forms stay private',async()=>{
@@ -321,7 +323,7 @@ test('connecting shared stores automatically queues one catalog sync and preserv
   await db.panels.insertOne({...panel,_id:'other',stores:{}});
   const storeId=await service.connect(panel._id,'123','gumroad','new-creator','SECRET-CANARY');
   assert.equal(await db.catalogJobs.countDocuments(),1);
-  const connected=await db.stores.findOne({_id:storeId});assert.equal(connected?.termsVersion,'1');assert.ok(connected?.termsAcceptedAt);
+  const connected=await db.stores.findOne({_id:storeId});assert.equal(connected?.termsVersion,TERMS_VERSION);assert.ok(connected?.termsAcceptedAt);
   await db.catalogJobs.updateOne({_id:storeId},{$set:{page:2}});
   assert.equal(await service.connect('other','123','gumroad','new-creator','SECRET-CANARY'),storeId);
   assert.equal((await db.catalogJobs.findOne({_id:storeId}))?.page,2);
@@ -1315,4 +1317,215 @@ test('callback returns to the triggering channel in the app or web',()=>{
   const events:string[]=[];
   runInNewContext(closeScript,{location:{set href(_url:string){throw new Error('blocked');},replace(url:string){events.push(url);}},document:{body:{dataset:{web:'https://discord.com/channels/456/444',app:'discord://-/channels/456/444'}}},setTimeout:()=>assert.fail('no timeout after a blocked URI')});
   assert.deepEqual(events,['https://discord.com/channels/456/444']);
+});
+
+const payhipKey='custom Payhip key CANARY', payhipAccount='PAYHIP-ACCOUNT-CANARY', payhipSecret='PAYHIP-PRODUCT-SECRET-CANARY';
+async function setupPayhip() {
+  await db.panels.updateOne({_id:panel._id},{$set:{stores:{},mappings:[]}});
+  const storeId=await service.connectPayhip(panel._id,'123',payhipAccount);
+  let p=await service.panel(panel._id);
+  const catalogId=await service.savePayhipProduct(p,'123','https://payhip.com/b/AbC12','Payhip Product',payhipSecret);
+  await service.addMapping(p,{provider:'payhip',productId:'AbC12',roleId:'789',label:'Payhip Product'});
+  p=await service.panel(panel._id);
+  service.providers=new Providers(async(_s,path,query)=>{
+    assert.equal(path,'/license/verify');
+    return {data:{enabled:true,product_link:'AbC12',license_key:query!.license_key,buyer_email:'PERSONAL-CANARY@example.com'}};
+  },secrets,(storeId,productId)=>db.catalog.findOne({storeId,productId}));
+  return {panel:p,store:(await db.stores.findOne({_id:storeId}))!,catalogId};
+}
+const payhipEvent=(type='refunded',extra:Record<string,unknown>={})=>({id:'same-transaction',type,price:900,amount_refunded:900,
+  signature:createHash('sha256').update(payhipAccount).digest('hex'),date:1703693218,date_refunded:1703693410,
+  email:'PERSONAL-CANARY@example.com',items:[{product_key:'AbC12',product_name:'Payhip Product',license_key:payhipKey}],...extra});
+
+test('Payhip verifies with a product secret, reserves the claim, and never stores a buyer key',async()=>{
+  const p=await setupPayhip(); let requests=0;
+  service.providers.request=createRequester(db,secrets,new Limits(db),async(url,options)=>{
+    requests++; const u=new URL(String(url)); assert.equal(u.origin+u.pathname,'https://payhip.com/api/v2/license/verify');
+    assert.equal(u.searchParams.get('license_key'),payhipKey); assert.equal(options?.method,'GET'); assert.equal(options?.body,undefined);
+    assert.equal((options?.headers as any)['product-secret-key'],payhipSecret);
+    assert.ok(!JSON.stringify(options).includes(payhipAccount));
+    return Response.json({data:{enabled:true,product_link:'AbC12',license_key:payhipKey,buyer_email:'PERSONAL-CANARY@example.com'}});
+  });
+  assert.deepEqual(await service.verifyKey(p.panel,'111',payhipKey),['789']);
+  await assert.rejects(service.verifyKey(p.panel,'222',payhipKey),{message:'claim_taken'});
+  const claim=(await db.claims.findOne({storeId:p.store._id}))!;
+  assert.equal(claim.nextCheckAt,undefined); assert.equal(await db.catalogJobs.countDocuments({_id:p.store._id}),0);
+  assert.equal(await secrets.open((await db.catalog.findOne({_id:p.catalogId}))!.credential!,p.catalogId),payhipSecret);
+  assert.ok(!JSON.stringify(await service.entitlementOf(claim)).includes(payhipKey));
+  assert.ok(!JSON.stringify(await service.exportSubject('111')).includes(payhipKey));
+  for(const collection of await db.db.collections()) {
+    const saved=JSON.stringify(await collection.find().toArray());
+    for(const canary of [payhipKey,payhipAccount,payhipSecret,'PERSONAL-CANARY']) assert.ok(!saved.includes(canary),`${collection.collectionName} leaked ${canary}`);
+  }
+  await db.claims.updateOne({_id:claim._id},{$set:{checkedAt:new Date(0)}});
+  await service.reconcile(await memberOf('111')); assert.deepEqual([...(roles.get('111')??[])],['789']);
+  assert.equal(requests,2);
+});
+
+test('Payhip requester distinguishes empty verification from outages and invalid JSON',async()=>{
+  const p=await setupPayhip();
+  for(const [body,status,expected] of [['',200,'key_not_found'],['not json',200,'provider_schema'],['{}',200,'provider_schema'],['',401,'payhip_product_secret'],['',500,'provider_unavailable']] as const) {
+    service.providers.request=createRequester(db,secrets,new Limits(db),async()=>new Response(body,{status}));
+    await assert.rejects(service.verifyKey(p.panel,'111',payhipKey),{message:expected});
+  }
+  assert.equal(await db.claims.countDocuments(),0);
+});
+
+test('Payhip scans only mapped products, preserves case, and rejects ambiguity and mismatches',async()=>{
+  const p=await setupPayhip(), hex='01234567-89abcdef-01234567-89abcdef';
+  await service.savePayhipProduct(p.panel,'123','Other','Unmapped',payhipSecret);
+  const seen:string[]=[];
+  service.providers.request=async(_s,_path,q,options)=>{
+    seen.push(options!.credential!.context); assert.equal(q?.license_key,hex);
+    return {data:{enabled:true,product_link:options!.credential!.context.split(':').at(-1),license_key:hex}};
+  };
+  await service.verifyKey(p.panel,'111',hex); assert.deepEqual(seen,[p.catalogId]);
+  await service.addMapping(p.panel,{provider:'payhip',productId:'Other',roleId:'790',label:'Other'});
+  const updated=await service.panel(panel._id);
+  await assert.rejects(service.verifyKey(updated,'111',hex),{message:'ambiguous_key'});
+  service.providers.request=async()=>({data:{enabled:true,product_link:'Wrong',license_key:hex}});
+  await assert.rejects(service.verifyKey(p.panel,'111',hex),{message:'provider_schema'});
+  service.providers.request=async()=>({data:{enabled:true,product_link:'AbC12',license_key:'WRONG'}});
+  await assert.rejects(service.verifyKey(p.panel,'111',hex),{message:'provider_schema'});
+});
+
+test('Payhip authenticated webhooks return 200 and handle paid/refund retries with the same transaction ID',async()=>{
+  const p=await setupPayhip(); await service.verifyKey(p.panel,'111',payhipKey); await service.reconcile(await memberOf('111'));
+  const app=createServer({BASE_URL:'https://keyfi.test'} as any,db,{} as any,{register:async()=>{}} as any,secrets,new Limits(db));
+  try {
+    const url='/webhooks/payhip/'+await secrets.open(p.store.webhookToken!,p.store._id);
+    assert.equal((await app.inject({method:'POST',url,payload:payhipEvent('refunded',{signature:'0'.repeat(64)})})).statusCode,403);
+    assert.equal((await db.claims.findOne({storeId:p.store._id}))?.eligibility,'eligible');
+    for(const type of ['paid','refunded','refunded','paid']) assert.equal((await app.inject({method:'POST',url,payload:payhipEvent(type)})).statusCode,200);
+    assert.equal(await db.revocations.countDocuments(),1);
+    assert.equal((await db.claims.findOne({storeId:p.store._id}))?.eligibility,'ineligible');
+    await service.reconcile(await memberOf('111')); assert.equal(roles.get('111')?.size,0);
+    await assert.rejects(service.verifyKey(p.panel,'111',payhipKey),{message:'ineligible'});
+    assert.ok((await db.stores.findOne({_id:p.store._id}))?.webhookReceivedAt);
+    assert.equal(await secrets.open((await db.catalog.findOne({_id:p.catalogId}))!.credential!,p.catalogId),payhipSecret);
+    const original=db.transaction.bind(db); db.transaction=async()=>{throw new Failure('database_unavailable');};
+    assert.equal((await app.inject({method:'POST',url,payload:payhipEvent()})).statusCode,503); db.transaction=original;
+  } finally {await app.close();}
+});
+
+test('Payhip refunds before or during verification cannot be bypassed, including after deletion',async()=>{
+  const p=await setupPayhip();
+  const response=service.providers.request;
+  service.providers.request=async(...args)=>{
+    const result=await response(...args);
+    await receivePayhip(db,secrets,p.store,payhipEvent());
+    return result;
+  };
+  await assert.rejects(service.verifyKey(p.panel,'111',payhipKey),{message:'ineligible'});
+  assert.equal(await db.claims.countDocuments(),0);
+  service.providers.request=response;
+  await service.requestDeletion('111'); await finishAll();
+  await assert.rejects(service.verifyKey(p.panel,'222',payhipKey),{message:'ineligible'});
+  assert.equal(await db.revocations.countDocuments(),1);
+});
+
+test('Payhip manual revocation preserves other purchases and applies across linked panels',async()=>{
+  const p=await setupPayhip();
+  const otherPanel={...p.panel,_id:'payhip-second',guildId:'777'}; await db.panels.insertOne(otherPanel);
+  await service.verifyKey(p.panel,'111',payhipKey); await service.verifyKey(otherPanel,'111',payhipKey);
+  await service.verifyKey(p.panel,'111','second-key'); await service.reconcile(await memberOf('111'));
+  const claimId=await secrets.hash('claim',p.store._id,await payhipLicenseHash(secrets,p.store._id,'AbC12',payhipKey));
+  await assert.rejects(service.revokePayhipPurchase(p.panel,'222',claimId),{message:'admin_required'});
+  await service.revokePayhipPurchase(p.panel,'123',claimId);
+  assert.deepEqual(await service.desired('456',await guildOf('111')),['789']);
+  assert.deepEqual(await service.desired('777',await guildOf('111','777')),[]);
+  await service.reconcile(await memberOf('111')); assert.equal(removed,0);
+  await service.requestDeletion('111'); await finishAll();
+  await assert.rejects(service.verifyKey(p.panel,'111',payhipKey),{message:'ineligible'});
+  await service.verifyKey(p.panel,'111','second-key');
+});
+
+test('Payhip partial refunds and missing keys require review without guessing buyer identity',async()=>{
+  const p=await setupPayhip(); await service.verifyKey(p.panel,'111',payhipKey);
+  for(const event of [payhipEvent('refunded',{amount_refunded:100}),payhipEvent('refunded',{items:[{product_key:'AbC12',product_name:'Payhip Product'}]})]) {
+    await receivePayhip(db,secrets,p.store,event);
+    assert.equal((await db.claims.findOne({storeId:p.store._id}))?.eligibility,'eligible');
+    assert.equal(await db.revocations.countDocuments(),0);
+    assert.equal((await db.stores.findOne({_id:p.store._id}))?.webhookReview,true);
+  }
+});
+
+test('Payhip freshly disabled keys remove existing access and are not background-polled',async()=>{
+  const p=await setupPayhip(); await service.verifyKey(p.panel,'111',payhipKey); await service.reconcile(await memberOf('111'));
+  service.providers.request=async()=>({data:{enabled:false,product_link:'AbC12',license_key:payhipKey}});
+  await assert.rejects(service.verifyKey(p.panel,'111',payhipKey),{message:'ineligible'});
+  await service.reconcile(await memberOf('111')); assert.equal(roles.get('111')?.size,0);
+  service.providers.request=async()=>assert.fail('Payhip must not be polled');
+  await new Jobs({} as any,db,service,discord as any).providers();
+  const h=ui({user:{id:'111'},permissions:'0'}),step=await h.interactions.prepare(await h.action('recheck')); await step.work!();
+  assert.ok(h.view().copy.includes('enter it again')); assert.equal((await db.claims.findOne({storeId:p.store._id}))?.nextCheckAt,undefined);
+});
+
+test('Payhip setup allows first manual product, secret rotation, and scoped manual revocation',async()=>{
+  await db.panels.updateOne({_id:panel._id},{$set:{stores:{},mappings:[]}});
+  const h=ui();
+  const connect=await h.interactions.prepare(await h.action('connect-store',{}, {provider:'payhip'})); assert.equal((connect.response as any).type,9);
+  const submit=await h.interactions.prepare(await h.action('credential-submit',{type:5,data:{components:[{custom_id:'value',value:payhipAccount}]}},{provider:'payhip'})); await submit.work!();
+  assert.ok(h.view().copy.includes('/webhooks/payhip/')); assert.ok(h.view().copy.includes('Awaiting an authenticated event'));
+  const p=await service.panel(panel._id); await h.interactions.settings(h.input(),p);
+  assert.equal(h.view().controls.find(c=>c.label==='Choose Product…').disabled,false);
+  const productForm=await h.interactions.prepare(await h.action('payhip-product')); assert.equal((productForm.response as any).type,9);
+  const fields=(secret:string)=>['product','name','secret'].map((custom_id,n)=>({custom_id,value:['AbC12','Payhip Product',secret][n]}));
+  const productSubmit=await h.interactions.prepare(await h.action('payhip-product-submit',{type:5,data:{components:fields(payhipSecret)}})); await productSubmit.work!();
+  assert.ok(h.view().copy.includes('Choose a role')); assert.ok(h.view().controls.some(c=>c.label==='Edit Product Secret…'));
+  const saved=await db.catalog.findOne({storeId:p.stores.payhip,productId:'AbC12'}); assert.ok(saved?.credential);
+  const edit=await h.interactions.prepare(await h.action('payhip-product',{}, {catalogId:saved!._id}));
+  assert.ok(!JSON.stringify(edit.response).includes(payhipSecret)); assert.ok(!JSON.stringify(edit.response).includes(saved!.credential!));
+  await service.savePayhipProduct(p,'123','AbC12','Payhip Product','ROTATED-SECRET');
+  assert.equal(await secrets.open((await db.catalog.findOne({_id:saved!._id}))!.credential!,saved!._id),'ROTATED-SECRET');
+  const discovered={...saved!,_id:`${p.stores.payhip}:missing`,productId:'missing'}; delete discovered.credential; await db.catalog.insertOne(discovered);
+  await assert.rejects(service.addMapping(p,{provider:'payhip',productId:'missing',roleId:'789',label:'Missing'}),{message:'payhip_product_secret'});
+  await assert.rejects(h.interactions.prepare(await h.action('payhip-revoke',{member:{user:{id:'222'},permissions:'32'}})),{message:'admin_required'});
+});
+
+test('Payhip account rotation preserves product secrets and webhook URL across panels',async()=>{
+  const p=await setupPayhip(),second={...panel,_id:'second',stores:{},mappings:[]}; await db.panels.insertOne(second);
+  assert.equal(await service.connectPayhip(second._id,'123',payhipAccount),p.store._id);
+  assert.equal(await service.connectPayhip(p.panel._id,'123','ROTATED-ACCOUNT'),p.store._id);
+  const rotated=(await db.stores.findOne({_id:p.store._id}))!;
+  assert.equal(rotated.webhookToken,p.store.webhookToken); assert.equal(rotated.webhookHash,p.store.webhookHash);
+  await assert.rejects(receivePayhip(db,secrets,rotated,payhipEvent()),{message:'webhook_signature'});
+  await assert.rejects(receivePayhip(db,secrets,p.store,payhipEvent()),{message:'store_disconnected'});
+  const third={...second,_id:'third'};await db.panels.insertOne(third);
+  assert.equal(await service.connectPayhip(third._id,'123','ROTATED-ACCOUNT'),p.store._id);
+  assert.equal(await secrets.open((await db.catalog.findOne({_id:p.catalogId}))!.credential!,p.catalogId),payhipSecret);
+});
+
+test('Payhip manual revoke controls confirm the selected purchase before changing access',async()=>{
+  const p=await setupPayhip(); await service.verifyKey(p.panel,'111',payhipKey);
+  const claim=(await db.claims.findOne({storeId:p.store._id}))!;
+  const h=ui(),find=await h.interactions.prepare(await h.action('payhip-revoke-buyer',{type:5,data:{components:[{custom_id:'value',value:'111'}]}})); await find.work!();
+  assert.equal(h.view().select.options.length,1); assert.equal(h.view().select.options[0].value,claim._id);
+  await h.choose(claim._id); assert.ok(h.view().copy.includes('every panel'));
+  assert.equal((await db.claims.findOne({_id:claim._id}))?.eligibility,'eligible');
+  await h.click('Revoke Verification'); assert.equal((await db.claims.findOne({_id:claim._id}))?.eligibility,'ineligible');
+  assert.ok(!JSON.stringify(h.calls).includes(payhipKey));
+});
+
+test('Payhip webhook discovers products without secrets and cannot grant access',async()=>{
+  const p=await setupPayhip();
+  await receivePayhip(db,secrets,p.store,payhipEvent('paid',{items:[{product_key:'NewItem',product_name:'New Item'}]}));
+  const discovered=await db.catalog.findOne({storeId:p.store._id,productId:'NewItem'});
+  assert.equal(discovered?.name,'New Item'); assert.equal(discovered?.credential,undefined);
+  assert.equal(await db.claims.countDocuments(),0); assert.equal(await db.bindings.countDocuments(),0);
+  await assert.rejects(service.addMapping(p.panel,{provider:'payhip',productId:'NewItem',roleId:'789',label:'New Item'}),{message:'payhip_product_secret'});
+  const h=ui(),select=await h.interactions.prepare(await h.action('product-selected',{data:{values:[discovered!._id]}})); await select.work!();
+  assert.ok(h.view().controls.some(c=>c.label==='Set Product Secret…'));
+});
+
+test('Payhip last-store disconnect cleans up secrets and revocations without stranding role removal',async()=>{
+  const p=await setupPayhip(); await service.verifyKey(p.panel,'111',payhipKey); await service.reconcile(await memberOf('111'));
+  await receivePayhip(db,secrets,p.store,payhipEvent());
+  await service.disconnect(p.panel,'payhip');
+  const jobs=new Jobs({} as any,db,service,{...discord,call:async()=>[{id:'456'}]} as any);
+  await jobs.maintenance();
+  assert.equal(await db.stores.countDocuments({_id:p.store._id}),0);
+  assert.equal(await db.catalog.countDocuments({storeId:p.store._id}),0);
+  assert.equal(await db.revocations.countDocuments({storeId:p.store._id}),0);
+  await service.reconcile(await memberOf('111')); assert.equal(roles.get('111')?.size,0);
 });

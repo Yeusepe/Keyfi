@@ -53,9 +53,9 @@ export function logFailure(event: string, error: unknown) {
   const databaseCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'number' ? error.code : undefined;
   process.stderr.write(`${JSON.stringify({event, code: safeCode(error), databaseCode, site})}\n`);
 }
-export const normalizeKey = (key: string) => {
+export const normalizeKey = (key: string, allowSpaces = false) => {
   const trimmed = key.trim();
-  if (!trimmed || trimmed.length > 160 || /\s|[\x00-\x1f\x7f]/.test(trimmed)) throw new Failure('invalid_key');
+  if (!trimmed || trimmed.length > 160 || /[\x00-\x1f\x7f]/.test(trimmed) || (!allowSpaces && /\s/.test(trimmed))) throw new Failure('invalid_key');
   return trimmed;
 };
 export const productNameKey = (name: string) => name.normalize('NFKC').trim().replace(/\s+/gu,' ').toLowerCase();

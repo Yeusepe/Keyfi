@@ -1,4 +1,4 @@
-export const TERMS_VERSION = '1';
+export const TERMS_VERSION = '2';
 
 export const buyerNotice = (contact: string) => `## Privacy
 Keyfi checks your purchases to give you Discord roles and keep them up to date.
@@ -15,7 +15,7 @@ Your raw license key, email, name, address, payment details, or messages.
 Discord processes the license form. Keyfi sends the key to the creator’s connected store to check your purchase. Your verification results are private; your roles are visible in the server. Keyfi never sells your data or uses it for ads.
 
 **How long**
-Saved verification data stays until you delete it. Temporary sign-in data expires after 10 minutes. After deletion, a one-way opt-out code prevents old purchase records from being imported again.
+Saved verification data stays until you delete it. Temporary sign-in data expires after 10 minutes. After deletion, a one-way opt-out code prevents old purchase records from being imported again. One-way codes for revoked Payhip licenses remain until the creator disconnects the store, to prevent those licenses being claimed again.
 
 **Your choices**
 Open **/verification → Privacy & Data** to download your saved details, disconnect Gumroad, or delete your data and managed roles across all servers.
@@ -24,13 +24,14 @@ Questions, including where Keyfi is hosted: ${contact}. You can also contact you
 
 export const creatorPrivacy = (contact: string) => `## Privacy for creators
 **What Keyfi reads from your store**
-Read-only access. It reads your product list and, when a buyer verifies, that one purchase or subscription. Gumroad scopes: view_profile, view_sales. Jinxxy scopes: products_read, licenses_read.
+Keyfi reads products and purchase status. Gumroad scopes: view_profile, view_sales. Jinxxy scopes: products_read, licenses_read. Payhip uses per-product secrets for v2 verification and the account API key to authenticate paid/refunded webhooks; those Payhip credentials also permit writes, but Keyfi only verifies licenses and never changes them.
 
 **What Keyfi stores**
-- Your store connection, encrypted
+- Your store connection and Payhip product secrets, encrypted
 - Your product names and IDs
 - For each verified buyer: the purchase ID, the product and whether it's valid
 - If Gumroad sign-in is on: one-way buyer codes and purchase IDs for your mapped products, so buyers can sign in instead of pasting a key
+- One-way codes for refunded or manually revoked Payhip licenses, until the store is disconnected
 
 Keyfi never stores buyer names, emails, prices, addresses, payment details or license keys.
 

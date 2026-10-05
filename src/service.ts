@@ -6,6 +6,7 @@ import { Failure, id, productNameKey, Secrets } from './security.js';
 import { providerFor, storeDefinition } from './stores/registry.js';
 import type { AccountCheck, Claim, Deletion, Entitlement, Mapping, Panel, Provider } from './model.js';
 import { TERMS_VERSION } from './notices.js';
+import { payhipProductId, revokePayhipClaim } from './stores/payhip.js';
 
 export class Service {
   constructor(public db: Database, public providers: Providers, public discord: DiscordPort, public secrets: Secrets, public buyerOAuthEnabled=true) {}
@@ -24,6 +25,7 @@ export class Service {
     const panel = await this.panel(panelId);
     await this.discord.administrator(panel.guildId, discordId);
     const storeId = await this.secrets.hash('store', provider, ownerId);
+    const webhookToken=definition.eventDriven?id():undefined;
     await this.db.transaction(async session => {
       const p = await this.db.panels.findOne({_id: panelId, active: true}, {session});
       if (!p || p.administrator !== discordId) throw new Failure('admin_required');
@@ -31,12 +33,52 @@ export class Service {
       const previous = await this.db.stores.findOne({_id: storeId}, {session});
       if (previous && previous.administrator !== discordId) throw new Failure('store_already_connected');
       if (previous?.status === 'disconnecting') throw new Failure('busy');
-      await this.db.stores.updateOne({_id: storeId}, {$set: {credential: await this.secrets.seal(token, storeId), status: 'active', termsVersion: TERMS_VERSION, termsAcceptedAt: new Date()},
-        $setOnInsert: {provider, ownerId, administrator: discordId, createdAt: new Date(), webhookPending: !!definition.hints}}, {upsert: true, session});
+      await this.db.stores.updateOne({_id: storeId}, {$set: {credential: await this.secrets.seal(token, storeId), status: 'active', termsVersion: TERMS_VERSION, termsAcceptedAt: new Date(),
+        ...(definition.eventDriven?{credentialHash:await this.secrets.hash('payhip-account',token)}:{})},
+        $inc:{revision:1},
+        ...(definition.eventDriven?{$unset:{webhookReceivedAt:''}}:{}),
+        $setOnInsert: {provider, ownerId, administrator: discordId, createdAt: new Date(), webhookPending: !!definition.hints,
+          ...(webhookToken?{webhookToken:await this.secrets.seal(webhookToken,storeId),webhookHash:await this.secrets.hash('webhook',webhookToken)}:{})}}, {upsert: true, session});
       await this.db.panels.updateOne({_id: panelId}, {$set: {[`stores.${provider}`]: storeId, refreshAt: new Date()}, $inc: {revision: 1}}, {session});
-      await this.db.catalogJobs.updateOne({_id: storeId}, {$setOnInsert: {page: 1, nextAt: new Date(), syncing: true}}, {upsert: true, session});
+      if(this.providers.get(provider).catalogPage) await this.db.catalogJobs.updateOne({_id: storeId}, {$setOnInsert: {page: 1, nextAt: new Date(), syncing: true}}, {upsert: true, session});
     });
     return storeId;
+  }
+  async connectPayhip(panelId: string, discordId: string, token: string) {
+    if(!token || token.length>160 || /\s|[\x00-\x1f\x7f]/.test(token)) throw new Failure('invalid_key');
+    const panel=await this.panel(panelId), credentialHash=await this.secrets.hash('payhip-account',token);
+    const matching=await this.db.stores.findOne({provider:'payhip',credentialHash});
+    const previous=panel.stores.payhip?await this.db.stores.findOne({_id:panel.stores.payhip}):matching;
+    if(matching && previous && matching._id!==previous._id) throw new Failure('disconnect_first');
+    return this.connect(panelId,discordId,'payhip',previous?.ownerId??credentialHash,token);
+  }
+  async savePayhipProduct(panel: Panel, discordId: string, input: string, name: string, secret: string) {
+    await this.discord.administrator(panel.guildId,discordId);
+    const productId=payhipProductId(input), storeId=panel.stores.payhip;
+    if(!storeId) throw new Failure('store_disconnected');
+    if(!name.trim() || name.trim().length>150 || secret.length>512 || /\s|[\x00-\x1f\x7f]/.test(secret)) throw new Failure('payhip_product_secret');
+    const catalogId=`${storeId}:${productId}`;
+    await this.db.transaction(async session=>{
+      if(!(await this.db.panels.updateOne({_id:panel._id,active:true,administrator:discordId,'stores.payhip':storeId},{$inc:{revision:1}},{session})).matchedCount) throw new Failure('admin_required');
+      if(!(await this.db.stores.updateOne({_id:storeId,status:'active',administrator:discordId},{$inc:{revision:1}},{session})).matchedCount) throw new Failure('store_disconnected');
+      const existing=await this.db.catalog.findOne({_id:catalogId},{session});
+      if(!secret && !existing?.credential) throw new Failure('payhip_product_secret');
+      await this.db.catalog.updateOne({_id:catalogId},{$set:{name:name.trim(),nameKey:productNameKey(name),fetchedAt:new Date(),
+        ...(secret?{credential:await this.secrets.seal(secret,catalogId)}:{})},
+        $setOnInsert:{storeId,productId,membership:false,licensed:true,variants:[]}},{upsert:true,session});
+    });
+    return catalogId;
+  }
+  async revokePayhipPurchase(panel: Panel, discordId: string, claimId: string) {
+    await this.discord.administrator(panel.guildId,discordId);
+    await this.db.transaction(async session=>{
+      const current=await this.db.panels.findOne({_id:panel._id,active:true,administrator:discordId},{session});
+      if(!current?.stores.payhip) throw new Failure('admin_required');
+      await this.db.panels.updateOne({_id:panel._id},{$inc:{revision:1}},{session});
+      const claim=await this.db.claims.findOne({_id:claimId,provider:'payhip',storeId:current.stores.payhip},{session});
+      if(!claim || !await this.db.bindings.findOne({panelId:panel._id,claimId},{session})) throw new Failure('expired');
+      await revokePayhipClaim(this.db,claim.storeId,claimId,'manual',session);
+    });
   }
   async syncStores(panelId: string, discordId: string) {
     const panel = await this.panel(panelId);
@@ -48,6 +90,8 @@ export class Service {
       let queued = false;
       const now = new Date();
       for (const storeId of Object.values(current.stores)) {
+        const provider=providerFor(current,storeId).id;
+        if(!this.providers.get(provider).catalogPage) continue;
         if (!(await this.db.stores.updateOne({_id: storeId, status: 'active', administrator: discordId}, {$inc: {revision: 1}}, {session})).matchedCount) throw new Failure('store_disconnected');
         const job = await this.db.catalogJobs.findOne({_id: storeId}, {session});
         if (job?.syncing || (job?.manualAfter && job.manualAfter > now)) continue;
@@ -73,22 +117,30 @@ export class Service {
   async verifyKey(panel: Panel, discordId: string, input: string): Promise<string[]> {
     const epochs = Object.fromEntries(await Promise.all(Object.values(panel.stores).map(async storeId => [storeId, await this.subjectEpoch(discordId, storeId)] as const)));
     await this.discord.memberRoles(panel.guildId, discordId);
-    const key = this.providers.normalizeKey(input);
+    const key = this.providers.normalizeKey(input,!!panel.stores.payhip);
     const requestId = await this.secrets.hash('inflight', panel._id, discordId, key);
     return this.db.withLease(`verify:${requestId}`, async guard => {
       const stores = await this.db.stores.find({_id: {$in: Object.values(panel.stores)}, status: 'active'}).toArray();
       const entitlement = await this.providers.resolve(panel, stores, key);
       if (!entitlement) throw new Failure('key_not_found');
       guard();
+      if(storeDefinition(entitlement.provider).eventDriven && entitlement.eligibility==='ineligible') {
+        const claimId=await this.secrets.hash('claim',entitlement.storeId,entitlement.entitlementId);
+        await this.db.transaction(async session=>{
+          if(!(await this.db.stores.updateOne({_id:entitlement.storeId,status:'active'},{$inc:{revision:1}},{session})).matchedCount) throw new Failure('store_disconnected');
+          await this.db.claims.updateOne({_id:claimId,checkedAt:{$lte:entitlement.checkedAt}},{$set:{eligibility:'ineligible',checkedAt:entitlement.checkedAt}},{session});
+          for(const binding of await this.db.bindings.find({claimId},{session}).toArray()) await this.db.dirty(binding.guildId,binding.subject,session);
+        });
+      }
       return this.claim(panel, discordId, entitlement, epochs[entitlement.storeId]);
     });
   }
   roles(panel: Panel, e: Pick<Entitlement, 'provider' | 'productId' | 'variant'>): string[] {
     return [...new Set(panel.mappings.filter(m => m.provider === e.provider && m.productId === e.productId && (!m.variant || m.variant === e.variant)).map(m => m.roleId))];
   }
-  async storedClaim(claimId: string, e: Entitlement, subject: string, nextCheckAt: Date): Promise<Claim> {
+  async storedClaim(claimId: string, e: Entitlement, subject: string, nextCheckAt?: Date): Promise<Claim> {
     const {entitlementId, referenceId, saleId, ...rest} = e;
-    return {...rest, _id: claimId, subject, nextCheckAt, reference: await this.secrets.seal(JSON.stringify({entitlementId, referenceId, saleId}), claimId)};
+    return {...rest, _id: claimId, subject, ...(nextCheckAt?{nextCheckAt}:{}), reference: await this.secrets.seal(JSON.stringify({entitlementId, referenceId, saleId}), claimId)};
   }
   async entitlementOf(claim: Claim): Promise<Entitlement> {
     const {_id, subject, reference, nextCheckAt, ...rest} = claim;
@@ -120,6 +172,7 @@ export class Service {
       // Writing the panel creates a conflict with concurrent disconnect/mapping changes.
       await this.db.panels.updateOne({_id: panel._id}, {$inc: {revision: 1}}, {session});
       if (!(await this.db.stores.updateOne({_id: e.storeId, status: 'active'}, {$inc: {revision: 1}}, {session})).matchedCount) throw new Failure('store_disconnected');
+      if(await this.db.revocations.findOne({_id:claimId},{session})) throw new Failure('ineligible');
       const existing = await this.db.claims.findOne({_id: claimId}, {session});
       if (existing && existing.subject !== s) throw new Failure('claim_taken');
       await this.db.claims.replaceOne({_id: claimId}, stored, {upsert: true, session});
@@ -201,7 +254,8 @@ export class Service {
   async matchingProducts(panel: Panel, catalogId: string) {
     const product=await this.db.catalog.findOne({_id:catalogId,storeId:{$in:Object.values(panel.stores)}});
     if(!product) throw new Failure('expired');
-    const matches=await this.db.catalog.find({storeId:{$in:Object.values(panel.stores)},nameKey:productNameKey(product.name)}).sort({storeId:1,_id:1}).toArray();
+    const matches=(await this.db.catalog.find({storeId:{$in:Object.values(panel.stores)},nameKey:productNameKey(product.name)}).sort({storeId:1,_id:1}).toArray())
+      .filter(p=>!providerFor(panel,p.storeId).productSecrets || p.credential);
     // Identical names within one store are ambiguous. Never guess which listing or tier to map.
     return matches.length>1 && new Set(matches.map(p=>p.storeId)).size===matches.length && matches.some(p=>p._id===product._id) ? matches : [product];
   }
@@ -222,6 +276,7 @@ export class Service {
       }
       for(const mapping of additions) {
         const definition=storeDefinition(mapping.provider);
+        if(definition.productSecrets && !await this.db.catalog.findOne({storeId:current.stores[mapping.provider],productId:mapping.productId,credential:{$exists:true}},{session})) throw new Failure('payhip_product_secret');
         if(mapping.membership) {
           const product=await this.db.catalog.findOne({storeId:current.stores[mapping.provider],productId:mapping.productId},{session});
           if(!product?.licensed) throw new Failure('membership_license_required');
@@ -278,7 +333,7 @@ export class Service {
             const claim=await this.db.claims.findOne({_id:binding.claimId,eligibility:'eligible'});
             const panel=await this.db.panels.findOne({_id:binding.panelId,active:true});
             if(claim && panel && panel.stores[claim.provider]===claim.storeId && this.roles(panel,claim).includes(role)) {
-              if(Date.now()-claim.checkedAt.getTime()<30_000) checked=true;
+              if(storeDefinition(claim.provider).eventDriven || Date.now()-claim.checkedAt.getTime()<30_000) checked=true;
               else await this.db.claims.updateOne({_id:claim._id},{$set:{nextCheckAt:new Date()}});
             }
           }
@@ -288,6 +343,7 @@ export class Service {
         // Record responsibility BEFORE the external write so a crash cannot orphan a role.
         await this.db.members.updateOne({_id: memberId}, {$addToSet: {managedRoles: role}});
         guard();
+        if((await this.db.members.findOne({_id:memberId}))?.revision!==member.revision) return;
         if (!actual.includes(role)) await this.discord.addRole(member.guildId, discordId, role);
       }
       await this.db.members.updateOne({_id: memberId, revision: member.revision}, {$set: {dirty: false}, $unset: {error: ''}});
@@ -366,6 +422,7 @@ export class Service {
   }
 }
 export function nextCheck(e: Entitlement) {
+  if(storeDefinition(e.provider).eventDriven) return undefined;
   const regular = Date.now() + (e.membership ? 6 * 3600_000 : 24 * 3600_000) + Math.floor(Math.random() * 60_000);
   return new Date(Math.max(Date.now() + 30_000, Math.min(regular, e.validUntil?.getTime() ?? regular)));
 }

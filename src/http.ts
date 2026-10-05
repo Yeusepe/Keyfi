@@ -5,7 +5,7 @@ import type { Database } from './db.js';
 import type { Store } from './model.js';
 import { storeDefinition } from './stores/registry.js';
 
-export type Requester = (store: Store, path: string, query?: Record<string,string>, options?: {background?: boolean; method?: string; body?: Record<string,string>}) => Promise<unknown>;
+export type Requester = (store: Store, path: string, query?: Record<string,string>, options?: {background?: boolean; method?: string; body?: Record<string,string>; credential?: {value: string; context: string}; allowEmpty?: boolean}) => Promise<unknown>;
 export class Limits {
   private limiters = new Map<string, RateLimiterMongo>();
   constructor(private db: Database) {}
@@ -35,7 +35,7 @@ export function createRequester(db: Database, secrets: Secrets, limits: Limits, 
     await limits.take('provider_total', store._id, definition.budget.total);
     const url = new URL(`${definition.apiBase}${path}`);
     for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
-    const token = await secrets.open(store.credential, store._id);
+    const token = await secrets.open(options.credential?.value ?? store.credential, options.credential?.context ?? store._id);
     const headers = definition.headers(token);
     if (options.body) headers['content-type'] = 'application/x-www-form-urlencoded';
     let response: Response;
@@ -59,13 +59,13 @@ export function createRequester(db: Database, secrets: Secrets, limits: Limits, 
     if (response.status === 404) throw new Failure('provider_not_found');
     if (!response.ok) throw new Failure('provider_unavailable');
     // Never attach a URL, response body, or provider error to an exception.
-    return readJson(response, definition.maxResponseBytes(path));
+    return readJson(response, definition.maxResponseBytes(path), options.allowEmpty);
   };
 }
-export async function readJson(response: Response, maximum = 2_000_000): Promise<unknown> {
+export async function readJson(response: Response, maximum = 2_000_000, allowEmpty = false): Promise<unknown> {
   try {
     const reader = response.body?.getReader();
-    if (!reader) throw new Failure('provider_schema');
+    if (!reader) { if(allowEmpty) return null; throw new Failure('provider_schema'); }
     const chunks: Uint8Array[] = []; let bytes = 0;
     while (true) {
       const result = await reader.read(); if (result.done) break;
@@ -73,6 +73,7 @@ export async function readJson(response: Response, maximum = 2_000_000): Promise
       if (bytes > maximum) { await reader.cancel(); throw new Failure('provider_schema'); }
       chunks.push(result.value);
     }
+    if(allowEmpty && bytes===0) return null;
     try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown; }
     catch { throw new Failure('provider_schema'); }
   } catch(e) { if(e instanceof Failure) throw e; throw new Failure('provider_unavailable'); }

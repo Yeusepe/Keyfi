@@ -8,11 +8,11 @@ export interface AdapterContext {
   catalog(storeId: string, productId: string): Promise<CatalogProduct | null>;
 }
 export interface StoreAdapter {
-  key(store: Store, key: string): Promise<Entitlement | null>;
+  key(store: Store, key: string, productIds?: string[]): Promise<Entitlement | null>;
   membershipKey?(store: Store, productIds: string[], key: string): Promise<Entitlement | null>;
-  readReference(store: Store, referenceId: string, membership?: boolean, background?: boolean): Promise<Entitlement>;
-  recheck(store: Store, entitlement: Entitlement, background?: boolean): Promise<Entitlement>;
-  catalogPage(store: Store, page?: number, cursor?: string): Promise<{products: Omit<CatalogProduct, 'nameKey'>[]; more: boolean; cursor?: string}>;
+  readReference?(store: Store, referenceId: string, membership?: boolean, background?: boolean): Promise<Entitlement>;
+  recheck?(store: Store, entitlement: Entitlement, background?: boolean): Promise<Entitlement>;
+  catalogPage?(store: Store, page?: number, cursor?: string): Promise<{products: Omit<CatalogProduct, 'nameKey'>[]; more: boolean; cursor?: string}>;
   versions(store: Store, product: CatalogProduct): Promise<CatalogProduct['variants']>;
   identify?(store: Store): Promise<string>;
   indexPage?(store: Store, productId: string, membership: boolean, cursor?: string, after?: string): Promise<{records: Lookup[]; cursor?: string}>;
@@ -27,6 +27,8 @@ export interface StoreDefinition {
   name: string;
   connection: {type: 'oauth'} | {type: 'api-key'; description: string};
   buyerSignIn?: boolean;
+  productSecrets?: boolean;
+  eventDriven?: boolean;
   apiBase: string;
   headers(token: string): Record<string,string>;
   budget: {total: number; interactive: number; background: number};

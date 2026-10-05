@@ -9,6 +9,7 @@ import { interactionSchema, type Interactions } from './interactions.js';
 import { Failure, logFailure, safeCode, type Secrets } from './security.js';
 import type { Limits } from './http.js';
 import { storeDefinitions } from './stores/registry.js';
+import { receivePayhip } from './stores/payhip.js';
 
 export function createServer(c: Config, db: Database, interactions: Interactions, auth: Authentication, secrets: Secrets, limits: Limits) {
   const app = Fastify({logger: false, bodyLimit: 32_768, requestTimeout: 30_000, connectionTimeout: 10_000, trustProxy: false});
@@ -64,12 +65,21 @@ export function createServer(c: Config, db: Database, interactions: Interactions
       } catch(e) { logFailure('interaction_prepare_failed',e);return interaction.type===4?{type:8,data:{choices:[]}}:{type:4,data:message(errorCopy(safeCode(e)))}; }
     });
   });
-  for(const definition of storeDefinitions.values()) if(definition.hints) app.post(`/webhooks/${definition.id}/:secret`,async(req,reply)=>{
+  for(const definition of storeDefinitions.values()) if(definition.hints || definition.id==='payhip') app.post(`/webhooks/${definition.id}/:secret`,async(req,reply)=>{
     const secret=(req.params as {secret:string}).secret;
     if(!/^[\w-]{32}$/.test(secret)) return reply.code(404).send();
     const store=await db.stores.findOne({provider:definition.id,webhookHash:await secrets.hash('webhook',secret),status:'active'});
     if(!store) return reply.code(404).send();
     await limits.take('webhook',store._id,30);
+    if(definition.id==='payhip') {
+      try { await receivePayhip(db,secrets,store,req.body); }
+      catch(e) {
+        if(e instanceof Failure && e.code==='webhook_signature') return reply.code(403).send();
+        if(e instanceof Failure && ['provider_schema','payhip_product'].includes(e.code)) return reply.code(400).send();
+        throw e;
+      }
+      return reply.code(200).send();
+    }
     const hint=definition.hints!.parse(req.body,store.ownerId);
     if(!hint) return reply.code(400).send();
     const {referenceId,membership}=hint;

@@ -3,8 +3,9 @@ import type { Panel } from '../model.js';
 import type { StoreDefinition } from './contract.js';
 import { gumroad } from './gumroad.js';
 import { jinxxy } from './jinxxy.js';
+import { payhip } from './payhip.js';
 
-export const storeDefinitions: ReadonlyMap<string,StoreDefinition> = new Map([gumroad,jinxxy].map(d=>[d.id,d]));
+export const storeDefinitions: ReadonlyMap<string,StoreDefinition> = new Map([gumroad,jinxxy,payhip].map(d=>[d.id,d]));
 export function storeDefinition(provider: string) {
   const definition=storeDefinitions.get(provider);
   if(!definition || definition.id!==provider || !/^[a-z][a-z\d-]{0,39}$/.test(provider)) throw new Failure('unsupported_store');

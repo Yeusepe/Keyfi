@@ -1,6 +1,6 @@
 # Keyfi
 
-Keyfi is a Discord bot that verifies Gumroad and Jinxxy purchases and gives buyers their Discord roles. Buyers link a Gumroad account or enter a license key; Keyfi keeps the mapped roles up to date.
+Keyfi is a Discord bot that verifies Gumroad, Jinxxy, and Payhip purchases and gives buyers their Discord roles. Buyers link a Gumroad account or enter a license key; Keyfi keeps the mapped roles up to date.
 
 ## Run locally
 
@@ -30,13 +30,28 @@ Create two Gumroad OAuth apps. Set the Discord Interactions Endpoint URL to `htt
 - `/keyfi map product:… role:…` — map all versions of a product to a role.
 - `/keyfi privacy`, `/verification` — privacy notices, rechecks, and data deletion.
 
-Products sync every six hours and purchases are rechecked automatically.
+Gumroad and Jinxxy products sync every six hours and purchases are rechecked automatically. Payhip uses the v2 license API when a buyer submits a key, then maintains access through refund webhooks and creator revocation.
 
 Gumroad account sign-in enables after the first scan of mapped products. Setup shows the number of indexed purchases and any retry or reconnection needed. The scan processes one page every two seconds, independently of purchase rechecks. Pages are saved in one database transaction; retries resume from the saved cursor. Gumroad returns [10 sales per page](https://github.com/antiwork/gumroad/blob/main/app/controllers/api/v2/sales_controller.rb), so 1,000 purchases need at least 100 requests. Keyfi caps Gumroad background traffic at 60 requests/minute and reserves another 20 for interactive verification; provider cooldowns still apply.
 
 Open `/keyfi setup` in each channel where you want a verification message, then choose **Publish Verification**. This refreshes the existing message or replaces it if deleted. All copies share the panel's product roles and update automatically. Products already configured appear last in product pickers.
 
 To remove a panel, open `/keyfi edit`, select it, and choose **Delete Panel…**. Confirm to remove its verification messages and product roles. Other panels and the access they grant stay in place.
+
+## Payhip
+
+1. In `/keyfi setup`, connect Payhip using your account API key from Payhip **Settings → Developer**. This authenticates webhooks; it is not used for license verification. Setup shows “Awaiting an authenticated event” until Payhip delivers one.
+2. Copy the private webhook URL shown in **Stores → Manage Payhip** into Payhip's Developer settings and enable **paid** and **refunded** events. Keep existing webhook URLs if other integrations need them.
+3. Choose **Add Payhip Product…**, enter its `https://payhip.com/b/…` URL, name, and product secret from **Edit product → Advanced options**, where license keys are enabled. Paid/refunded webhooks also discover products; each still needs its secret before mapping. Secrets are encrypted and shared by panels using the same store connection. Choose a product and **Edit Product Secret…** to rotate one.
+4. Select the buyer role and publish verification. Buyers use the same license form as other stores; Keyfi checks only this panel's mapped Payhip products. Both generated and custom keys are supported, with no legacy API or usage-counter writes.
+
+Payhip has no public product-list endpoint or purchase lookup by license in its [v2 API](https://payhip.com/api-reference). A submitted key is used only in memory; saved references contain a store/product-scoped HMAC, never a recoverable buyer key or buyer email. Keyfi does not poll Payhip licenses. Buyers can enter a key again for a fresh check. Role restoration uses the saved status maintained by events and the creator.
+
+Authenticated full refunds with a license key revoke the matching claim and update roles on every linked panel. Processing is repeatable, handles refunds before verification, and never lets a later paid event or key submission restore a revoked claim. Roles supported by other valid purchases remain. Payhip retries require a [200 response](https://help.payhip.com/article/115-webhooks); Keyfi sends it only after saving the event's effects.
+
+For a missed refund, a license disabled in Payhip, or a partial refund, use **Stores → Manage Payhip → Find Buyer…**, enter the buyer's Discord ID, and confirm **Revoke Verification** for the purchase. Refunds without a license key and partial refunds flag the store for manual review. **Mark Reviewed** clears that notice after handling the affected sales in Payhip. Revocation blocks that license in Keyfi until the store connection is deleted, even if the buyer deletes their data. It does not modify Payhip. Subscription lifecycle automation is not supported.
+
+Disconnecting the last panel deletes the local connection, product secrets, and revocation codes. Remove its webhook URL from Payhip manually. Reconnecting credentials preserves the existing URL; after rotating the account API key, reconnect Payhip in any panel using that connection.
 
 ## Encryption and privacy
 

@@ -28,7 +28,7 @@ async function main() {
   const service=new Service(db,providers,discord,secrets,oauthConfigured(c,'buyer'));
   const refreshSetup=(panelId:string)=>interactions.refreshSetup(panelId);
   const auth=createAuthentication(c,db,service,discord,secrets,limits);
-  const interactions=new Interactions(db,service,discord,auth,limits,c.PRIVACY_CONTACT);
+  const interactions=new Interactions(db,service,discord,auth,limits,c.PRIVACY_CONTACT,c.BASE_URL);
   const app=createServer(c,db,interactions,auth,secrets,limits);
   const jobs=new Jobs(c,db,service,discord,refreshSetup);
   await jobs.start(); await app.listen({port:c.PORT,host:c.NODE_ENV==='production'?'0.0.0.0':'127.0.0.1'});

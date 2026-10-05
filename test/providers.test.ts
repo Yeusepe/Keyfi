@@ -50,6 +50,21 @@ test('unrecognized syntax is bounded to the panel’s two stores',async()=>{
   assert.equal(await providers.resolve(panel,[store,jinxStore,{...store,_id:'unrelated'}],'custom-key-value'),null);
   assert.equal(count,2);
 });
+test('Payhip custom keys cannot hide an ambiguous Gumroad membership match',async()=>{
+  const payhipStore={...store,_id:'payhip',provider:'payhip'}, membershipKey='01234567-89ABCDEF-01234567-89ABCDEF';
+  const providers=new Providers(async(s,path)=>{
+    if(s.provider==='payhip') return {data:{enabled:true,product_link:'AbC12',license_key:membershipKey}};
+    if(path==='/sales') return {success:true,sales:[]};
+    if(path==='/licenses/verify') return {success:true,purchase:{product_id:'membership',seller_id:'creator',subscription_id:'sub-1'}};
+    if(path==='/subscribers/sub-1') return {success:true,subscriber:{id:'sub-1',product_id:'membership',user_id:'buyer-1',purchase_ids:['p1'],status:'alive',license_key:membershipKey}};
+    assert.fail('Unexpected request');
+  },secrets,async()=>({_id:'payhip:AbC12',storeId:'payhip',productId:'AbC12',name:'Product',nameKey:'product',membership:false,licensed:true,variants:[],fetchedAt:new Date(),credential:'encrypted'}));
+  const p={...panel,stores:{gumroad:'gum',payhip:'payhip'},mappings:[
+    {provider:'gumroad',productId:'membership',membership:true,roleId:'789',label:'Membership'},
+    {provider:'payhip',productId:'AbC12',roleId:'789',label:'Payhip'},
+  ]};
+  await assert.rejects(providers.resolve(p,[store,payhipStore],membershipKey),{message:'ambiguous_key'});
+});
 test('Jinxxy rejects ambiguous or mismatched keys',async()=>{
   const ambiguous=new Providers(async()=>({page_count:1,results:[{id:'a'},{id:'b'}]}),secrets);
   await assert.rejects(ambiguous.get('jinxxy').key(jinxStore,'ABCD-446655440000'),{message:'ambiguous_key'});

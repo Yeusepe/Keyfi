@@ -32,7 +32,7 @@ const optionText = (value: string) => {
   return plain.length > 100 ? `${plain.slice(0, 69)}…${plain.slice(-30)}` : plain || 'Untitled';
 };
 export class Interactions {
-  constructor(private db: Database, private service: Service, private discord: DiscordApi, private auth: Authentication, private limits: Limits, private contact = 'the Keyfi operator') {}
+  constructor(private db: Database, private service: Service, private discord: DiscordApi, private auth: Authentication, private limits: Limits, private contact = 'the Keyfi operator', private baseUrl = '') {}
   private actor(i: Interaction) { return i.member.user.id; }
   private isAdmin(i: Interaction) { return !!(BigInt(i.member.permissions) & (PermissionFlagsBits.ManageGuild | PermissionFlagsBits.Administrator)); }
   private async action(i: Interaction, panelId: string, action: string, data?: Record<string,string>) {
@@ -50,12 +50,12 @@ export class Interactions {
       new LabelBuilder().setLabel(label).setDescription(description).setTextInputComponent(new TextInputBuilder().setCustomId('value').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(160)),
     ).toJSON()};
   }
-  private value(i: Interaction) {
+  private value(i: Interaction, field = 'value') {
     const values: string[] = [];
     const walk = (component: unknown) => {
       if (!component || typeof component !== 'object') return;
       const c = component as {custom_id?: string; value?: unknown; component?: unknown; components?: unknown[]};
-      if (c.custom_id === 'value' && typeof c.value === 'string') values.push(c.value);
+      if (c.custom_id === field && typeof c.value === 'string') values.push(c.value);
       if (c.component) walk(c.component); if (c.components) c.components.forEach(walk);
     };
     i.data.components?.forEach(walk);
@@ -97,11 +97,29 @@ export class Interactions {
         await this.service.panel(action.panelId,i.guild_id);
         return {response:this.modal(await this.action(i,action.panelId,'license'),'Verify your purchase','License key','Paste the full key from your receipt. Discord processes this form; Keyfi never saves the key.')};
       }
+      if(action.action==='payhip-product' || action.action==='payhip-revoke') {
+        const panel=await this.service.panel(action.panelId,i.guild_id); await this.admin(i,panel);
+        if(!panel.stores.payhip) throw new Failure('store_disconnected');
+        if(action.action==='payhip-revoke') return {response:this.modal(await this.action(i,panel._id,'payhip-revoke-buyer'),'Find Payhip verification','Buyer Discord user ID','Enter the buyer’s Discord user ID to choose a purchase to revoke.')};
+        const product=action.data?.catalogId?await this.db.catalog.findOne({_id:action.data.catalogId,storeId:panel.stores.payhip}):null;
+        if(action.data?.catalogId && !product) throw new Failure('expired');
+        const modal=new ModalBuilder().setCustomId(await this.action(i,panel._id,'payhip-product-submit',action.data)).setTitle('Payhip product');
+        for(const [field,label,description,value,required,max] of [
+          ['product','Product URL or permalink','Use the payhip.com/b/… link.',product?.productId??'',true,250],
+          ['name','Product name','Shown when choosing a buyer role.',product?.name.slice(0,150)??'',true,150],
+          ['secret','Product secret key','Payhip → Edit product → Advanced options. Leave blank to keep the saved secret.','',!product?.credential,512],
+        ] as const) {
+          const input=new TextInputBuilder().setCustomId(field).setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(max);
+          if(value) input.setValue(value);
+          modal.addLabelComponents(new LabelBuilder().setLabel(label).setDescription(description).setTextInputComponent(input));
+        }
+        return {response:{type:9,data:modal.toJSON()}};
+      }
       const connection=action.action==='connect-store'?storeDefinition(action.data?.provider??''):undefined;
       if (action.action==='search' || connection?.connection.type==='api-key') {
         await this.admin(i,await this.service.panel(action.panelId,i.guild_id));
         const next = await this.action(i, action.panelId, action.action === 'search' ? 'search-submit' : 'credential-submit', action.data);
-        return {response: this.modal(next, action.action === 'search' ? 'Find a product' : `Connect ${connection!.name}`, action.action === 'search' ? 'Product name' : 'Read-only API key',
+        return {response: this.modal(next, action.action === 'search' ? 'Find a product' : `Connect ${connection!.name}`, action.action === 'search' ? 'Product name' : connection?.eventDriven?'Account API key':'Read-only API key',
           action.action === 'search' ? 'Enter all or part of the product name.' : connection!.connection.type==='api-key'?connection!.connection.description:'')};
       }
     }
@@ -152,12 +170,12 @@ export class Interactions {
     if(notice) content.push(display(notice));
     if(!Object.keys(panel.stores).length) {
       content.push(...await this.connections(i,panel));
-      content.push(display('-# Products sync automatically. Connecting accepts the data terms in /keyfi privacy.'));
+      content.push(display('-# Connecting accepts the data terms in /keyfi privacy.'));
     }
     else {
       content.push(section(`**Stores**\n${state.sync}`,button('Stores',await this.action(i,panel._id,'stores'))));
       content.push(section(`**Product roles**\n${panel.mappings.length?`${panel.mappings.length} configured. Add or change who receives a role.`:'Choose a product and the role its buyers receive.'}`,
-        panel.mappings.length?button('Product Roles',await this.action(i,panel._id,'roles')):button('Choose Product…',await this.action(i,panel._id,'products',{page:'0'}),ButtonStyle.Primary).setDisabled(!state.count)));
+        panel.mappings.length?button('Product Roles',await this.action(i,panel._id,'roles')):button('Choose Product…',await this.action(i,panel._id,'products',{page:'0'}),ButtonStyle.Primary).setDisabled(!state.count&&!panel.stores.payhip)));
       if(panel.mappings.length) {
         content.push(divider());
         content.push(section(`**Verification messages**\n${panel.messages.length?`Published in ${panel.messages.length} ${panel.messages.length===1?'channel':'channels'}. Changes update automatically.\n`:''}Create or refresh the message in this channel. Open **/keyfi setup** in another channel to publish there too.${state.account?'\n'+state.account:''}`,button('Publish Verification',await this.action(i,panel._id,'publish'),ButtonStyle.Primary)));
@@ -194,7 +212,7 @@ export class Interactions {
     const sections=[];
     for(const definition of storeDefinitions.values()) {
       const connected=!!panel.stores[definition.id];
-      sections.push(section(`**${definition.name}**\n${connected?'Connected':definition.connection.type==='oauth'?'Connect your creator account.':'Connect with a read-only API key.'}`,
+      sections.push(section(`**${definition.name}**\n${connected?'Connected':definition.connection.type==='oauth'?'Connect your creator account.':definition.connection.description}`,
         button(`${connected?'Manage':'Connect'} ${definition.name}`,await this.action(i,panel._id,connected?'store':'connect-store',{provider:definition.id}))));
     }
     return sections;
@@ -218,8 +236,9 @@ export class Interactions {
     const products = await this.catalogChoices([panel],query,paging.start,pageSize);
     const action = await this.action(i, panel._id, 'product-selected', {productPage:String(paging.page),search});
     const nav = [button('Filter Products…', await this.action(i, panel._id, 'search'))];
+    if(panel.stores.payhip) nav.push(button('Add Payhip Product…',await this.action(i,panel._id,'payhip-product')));
     if(search) nav.push(button('Clear Filter',await this.action(i,panel._id,'products',{page:'0'})));
-    const copy = `## Choose a product\n${search?`Filter: **${text(search)}**\n`:''}${products.length?`${paging.label} products\nChoose a product, then its buyer role.`:search?'No products match. Change or clear the filter.':'No products available yet. Check sync progress in setup.'}`;
+    const copy = `## Choose a product\n${search?`Filter: **${text(search)}**\n`:''}${products.length?`${paging.label} products\nChoose a product, then its buyer role.`:search?'No products match. Change or clear the filter.':panel.stores.payhip?'Add a Payhip product below. Products also appear after a payment or refund webhook.':'No products available yet. Check sync progress in setup.'}`;
     return this.select(i, copy, action, products.map(p => ({label: p.name, value: p._id, description: `${providerFor(panel,p.storeId).name}${p.mapped?' · Added':''}`})),
       [...await this.pagination(i,panel._id,'products',paging,{search}),row(...nav),divider(),row(button('Back to Product Roles',await this.action(i,panel._id,'roles')))],'Choose a product');
   }
@@ -245,7 +264,7 @@ export class Interactions {
     return this.send(i,message(section(copy,button('Add Product…',await this.action(i,panel._id,'products',{page:'0'}),ButtonStyle.Primary)),
       [...entries,...await this.pagination(i,panel._id,'roles',paging)],[row(await this.back(i,panel._id))]));
   }
-  private async run(i: Interaction, action?: Action) {
+  private async run(i: Interaction, action?: Action): Promise<void> {
     const actor = this.actor(i), custom = i.data.custom_id;
     if (i.data.name === 'verification' || custom==='keyfi:verification' || action?.action==='verification') return this.manageAccess(i);
     if(action?.action==='privacy-settings') return this.privacySettings(i);
@@ -303,7 +322,7 @@ export class Interactions {
       if(await this.db.subjects.countDocuments({_id:{$in:codes.stores},deleting:true}) || await this.db.members.countDocuments({_id:{$in:codes.members},deleting:true})) throw new Failure('deleting');
       return this.db.withLease(`recheck:${await this.service.secrets.hash('recheck',actor)}`,async()=>{
         const requestedAt=new Date();
-        const queued=await this.db.claims.updateMany({subject:{$in:codes.stores}},{$set:{nextCheckAt:requestedAt}});
+        const queued=await this.db.claims.updateMany({subject:{$in:codes.stores},nextCheckAt:{$exists:true}},{$set:{nextCheckAt:requestedAt}});
         if(!queued.matchedCount) return this.manageAccess(i);
         await this.send(i,message(`## Checking ${queued.matchedCount} ${queued.matchedCount===1?'purchase':'purchases'}…\nThe result will appear here. Existing access stays in place if a store cannot be reached.`));
         const deadline=Date.now()+30_000;
@@ -323,6 +342,39 @@ export class Interactions {
       return this.send(i, message(roleSummary(await this.service.verifyKey(panel, actor, this.value(i))),[],[accessRow()]));
     }
     await this.admin(i, panel);
+    if(action.action==='payhip-product-submit') {
+      const catalogId=await this.service.savePayhipProduct(panel,actor,this.value(i,'product'),this.value(i,'name'),this.value(i,'secret').trim());
+      const product=await this.db.catalog.findOne({_id:catalogId}); if(!product) throw new Failure('expired');
+      return this.chooseRole(i,panel,{catalogId,provider:'payhip',variant:'',productPage:'0',search:''},product.name);
+    }
+    if(action.action==='payhip-revoke-buyer' || action.action==='payhip-revoke-page') {
+      const buyer=action.action==='payhip-revoke-buyer'?this.value(i).trim():action.data?.buyer??'';
+      if(!/^\d{1,20}$/.test(buyer) || !panel.stores.payhip) throw new Failure('invalid_discord_id');
+      const bindings=await this.db.bindings.find({panelId:panel._id,subject:await this.service.guildSubject(buyer,panel.guildId)}).toArray();
+      const query={_id:{$in:bindings.map(b=>b.claimId)},provider:'payhip',storeId:panel.stores.payhip,eligibility:'eligible' as const};
+      const paging=pageInfo(Number(action.data?.page??0),await this.db.claims.countDocuments(query));
+      const claims=await this.db.claims.find(query).sort({_id:1}).skip(paging.start).limit(pageSize).toArray();
+      const products=await this.db.catalog.find({storeId:panel.stores.payhip,productId:{$in:claims.map(c=>c.productId)}}).toArray();
+      return this.select(i,`## Revoke Payhip verification\n${claims.length?`Choose a purchase for <@${buyer}>. ${paging.label}`:'No active Payhip verifications for this buyer on this panel.'}`,
+        await this.action(i,panel._id,'payhip-revoke-selected'),claims.map(c=>({label:products.find(p=>p.productId===c.productId)?.name??c.productId,value:c._id,description:`Verified ${c.checkedAt.toISOString().slice(0,10)} · ${c._id.slice(-8)}`})),
+        [...await this.pagination(i,panel._id,'payhip-revoke-page',paging,{buyer}),row(button('Back to Payhip',await this.action(i,panel._id,'store',{provider:'payhip'})))]);
+    }
+    if(action.action==='payhip-revoke-selected') {
+      const claim=await this.db.claims.findOne({_id:selected,storeId:panel.stores.payhip,provider:'payhip'});
+      if(!claim || !await this.db.bindings.findOne({panelId:panel._id,claimId:claim._id})) throw new Failure('expired');
+      const product=await this.db.catalog.findOne({storeId:claim.storeId,productId:claim.productId});
+      return this.send(i,message(`## Revoke this purchase?\n**${text(product?.name??claim.productId)}**\nThis blocks this license in Keyfi across every panel using this Payhip connection. Roles supported by other valid purchases remain. This does not change the license in Payhip.`,[
+        row(button('Cancel',await this.action(i,panel._id,'store',{provider:'payhip'})),button('Revoke Verification',await this.action(i,panel._id,'payhip-revoke-confirm',{claimId:claim._id}),ButtonStyle.Danger)),
+      ]));
+    }
+    if(action.action==='payhip-revoke-confirm') {
+      await this.service.revokePayhipPurchase(panel,actor,action.data?.claimId??'');
+      return this.settings(i,panel,'Payhip verification revoked. Buyer roles will update automatically.');
+    }
+    if(action.action==='payhip-review-done') {
+      await this.db.stores.updateOne({_id:panel.stores.payhip,administrator:actor,status:'active'},{$unset:{webhookReview:''}});
+      return this.settings(i,panel,'Refund review marked complete.');
+    }
     if(action.action==='settings') return this.settings(i,panel);
     if(action.action==='delete-panel-confirm') return this.send(i,message(`## Delete this panel?\nThis removes its ${panel.mappings.length} product roles and ${panel.messages.length} published verification messages. Buyers lose roles granted only through this panel. Stores and access used by other panels stay connected.`,[
       row(button('Cancel',await this.action(i,panel._id,'settings')),button('Delete Panel',await this.action(i,panel._id,'delete-panel'),ButtonStyle.Danger)),
@@ -345,12 +397,22 @@ export class Interactions {
     }
     if(action.action==='stores' || action.action==='manage') return this.send(i,message('## Stores', [
       ...await this.connections(i,panel),divider(),
-      section('**Automatic sync**\nChecks for changes every six hours. Sync now to check sooner.',button('Sync Now',await this.action(i,panel._id,'sync')).setDisabled(!Object.keys(panel.stores).length)),
+      section('**Product updates**\nGumroad and Jinxxy sync every six hours. Payhip products arrive through webhooks or manual entry.',button('Sync Now',await this.action(i,panel._id,'sync')).setDisabled(!Object.keys(panel.stores).some(p=>!storeDefinition(p).eventDriven))),
     ],[row(await this.back(i,panel._id))]));
     if(action.action==='store') {
       const definition=storeDefinition(action.data?.provider??'');
       if(!panel.stores[definition.id]) throw new Failure('expired');
+      const payhipSections: ContainerComponentBuilder[]=[];
+      if(definition.id==='payhip') {
+        const store=await this.db.stores.findOne({_id:panel.stores.payhip,status:'active'}); if(!store?.webhookToken) throw new Failure('expired');
+        const url=`${this.baseUrl}/webhooks/payhip/${await this.service.secrets.open(store.webhookToken,store._id)}`;
+        payhipSections.push(display(`**Refund webhooks**\nAdd this URL in Payhip → Account → Settings → Developer for paid and refunded events. Keep it private.\n\n${url}\n\n${store.webhookReceivedAt?`Last authenticated event <t:${Math.floor(store.webhookReceivedAt.getTime()/1000)}:R>.`:'Awaiting an authenticated event. The account API key cannot be checked until an event arrives.'}`),
+          section('**Products**\nAdd a product link and its v2 secret, or choose a discovered product to set its secret.',button('Add Payhip Product…',await this.action(i,panel._id,'payhip-product'))),
+          section('**Manual revocation**\nUse for missed refunds or licenses disabled directly in Payhip. Partial refunds need your review.',button('Find Buyer…',await this.action(i,panel._id,'payhip-revoke'))));
+        if(store.webhookReview) payhipSections.push(section('**Refund review needed**\nA partial refund or refund without a license key arrived. Review your Payhip sales and revoke verification here if needed.',button('Mark Reviewed',await this.action(i,panel._id,'payhip-review-done'))));
+      }
       return this.send(i,message(`## ${definition.name}\nConnected to this verification panel.`,[
+        ...payhipSections,
         section('**Connection**\nAuthorize the store again if its credentials have changed.',button(`Reconnect ${definition.name}`,await this.action(i,panel._id,'connect-store',{provider:definition.id}))),divider(),
         section('**Disconnect store**\nRemove this store and the roles it grants through this panel.',button('Disconnect…',await this.action(i,panel._id,'disconnect-confirm',{provider:definition.id}))),
       ],[row(button('Back to Stores',await this.action(i,panel._id,'stores')))]));
@@ -364,6 +426,10 @@ export class Interactions {
     }
     if (action.action === 'credential-submit') {
       const provider=storeDefinition(action.data?.provider??'').id, adapter=this.service.providers.get(provider);
+      if(provider==='payhip') {
+        await this.service.connectPayhip(panel._id,actor,this.value(i).trim());
+        return this.run(i,{...action,action:'store'});
+      }
       if(!adapter.identify) throw new Failure('unsupported_store');
       const token = this.value(i).trim(), tempId = await this.service.secrets.hash('credential-budget',this.value(i).trim());
       const temporary: Store = {_id: tempId, provider, ownerId: '', credential: await this.service.secrets.seal(token, tempId), administrator: actor, status: 'active', createdAt: new Date()};
@@ -374,6 +440,9 @@ export class Interactions {
     if (action.action === 'product-selected' || action.action === 'single-product' || action.action === 'variants') {
       const p = await this.db.catalog.findOne({_id: action.action==='product-selected' ? selected : action.data?.catalogId, storeId: {$in: Object.values(panel.stores)}}); if (!p) throw new Failure('expired');
       const provider = providerFor(panel,p.storeId).id;
+      if(provider==='payhip' && !p.credential) return this.send(i,message(`## Set the product secret\n**${text(p.name)}**\nPayhip requires a secret for each product. Copy it from the product’s Advanced options.`,[
+        row(button('Set Product Secret…',await this.action(i,panel._id,'payhip-product',{catalogId:p._id}),ButtonStyle.Primary)),
+      ]));
       if(action.action==='product-selected' && await this.suggestStores(i,panel,p._id,action.data??{})) return;
       if(action.action==='single-product' && action.data?.roleId) {
         await this.service.mapProducts(panel,[p._id],action.data.roleId,productNameKey(p.name));
@@ -477,18 +546,19 @@ export class Interactions {
     const pending=await this.db.members.countDocuments({_id:{$in:codes.members},dirty:true});
     const shown=claims.slice(0,10),products=shown.length?await this.db.catalog.find({$or:shown.map(c=>({storeId:c.storeId,productId:c.productId}))},{projection:{storeId:1,productId:1,name:1}}).toArray():[];
     const checked=requestedAt?claims.filter(c=>c.checkedAt>=requestedAt).length:0;
-    const queued=requestedAt?claims.filter(c=>c.checkedAt<requestedAt&&c.nextCheckAt<=requestedAt).length:0;
-    const failed=requestedAt?claims.filter(c=>c.checkedAt<requestedAt&&c.nextCheckAt>requestedAt).length:0;
+    const polling=claims.filter(c=>c.nextCheckAt), eventDriven=claims.some(c=>storeDefinition(c.provider).eventDriven);
+    const queued=requestedAt?polling.filter(c=>c.checkedAt<requestedAt&&c.nextCheckAt!<=requestedAt).length:0;
+    const failed=requestedAt?polling.filter(c=>c.checkedAt<requestedAt&&c.nextCheckAt!>requestedAt).length:0;
     const status=subject?.deleting?'Removing your roles and verification data from all servers…':!claims.length?'No purchases verified yet. Use a creator’s verification message to get started.':
-      `${requestedAt?`Checked ${checked} of ${claims.length} purchases.`:`${claims.length} ${claims.length===1?'purchase':'purchases'} linked across your servers.`}${queued?' Remaining checks continue automatically.':''}${failed?' Some purchases could not be confirmed; their previous access is retained.':''}\n${pending?'Updating your Discord roles…':'Purchases are checked automatically.'}`;
+      `${requestedAt?`Checked ${checked} of ${polling.length} purchases.`:`${claims.length} ${claims.length===1?'purchase':'purchases'} linked across your servers.`}${queued?' Remaining checks continue automatically.':''}${failed?' Some purchases could not be confirmed; their previous access is retained.':''}\n${pending?'Updating your Discord roles…':polling.length?'Purchases are checked automatically.':''}${eventDriven?'\nPayhip refunds update access automatically. To check a Payhip license now, enter it again on the creator’s verification message.':''}`;
     const entries=shown.map(c=>{
       const name=products.find(p=>p.storeId===c.storeId&&p.productId===c.productId)?.name??'Purchase';
-      const state=requestedAt&&c.checkedAt<requestedAt?(c.nextCheckAt<=requestedAt?'Waiting to check':'Could not confirm'):c.eligibility==='eligible'?'Verified':c.eligibility==='ineligible'?'No longer eligible':'Not confirmed';
+      const state=requestedAt&&c.nextCheckAt&&c.checkedAt<requestedAt?(c.nextCheckAt<=requestedAt?'Waiting to check':'Could not confirm'):c.eligibility==='eligible'?'Verified':c.eligibility==='ineligible'?'No longer eligible':'Not confirmed';
       return `- **${text(storeDefinition(c.provider).name)} · ${text(name)}**: ${state}\n  Last checked <t:${Math.floor(c.checkedAt.getTime()/1000)}:R>`;
     }).join('\n');
     const roles=await this.service.desired(i.guild_id,await this.service.guildSubject(this.actor(i),i.guild_id));
     return this.send(i,message('## Manage access',[
-      section(`**Purchases**\n${status}${entries?'\n\n'+entries:''}${claims.length>shown.length?`\nShowing ${shown.length} of ${claims.length} purchases. Download your data for the full list.`:''}`,button('Check Purchases',await this.action(i,'','recheck')).setDisabled(!claims.length||!!subject?.deleting)),
+      section(`**Purchases**\n${status}${entries?'\n\n'+entries:''}${claims.length>shown.length?`\nShowing ${shown.length} of ${claims.length} purchases. Download your data for the full list.`:''}`,button('Check Purchases',await this.action(i,'','recheck')).setDisabled(!polling.length||!!subject?.deleting)),
       display(`**Verified roles in this server**\n${roles.length?roles.slice(0,10).map(role=>`<@&${role}>`).join(', ')+(roles.length>10?` and ${roles.length-10} more`:''):'No roles from verified purchases.'}`),divider(),
       section('**Privacy & data**\nManage linked accounts and saved verification details.',button('Privacy & Data',await this.action(i,'','privacy-settings'))),
     ]));
@@ -521,6 +591,8 @@ export class Interactions {
     const roles=new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(new RoleSelectMenuBuilder().setCustomId(customId).setPlaceholder('Choose buyer role'));
     const back=data.page===undefined?button('Back to Products',await this.action(i,panel._id,'products',{page:data.productPage??'0',search:data.search??''})):
       button('Back to Buyers',await this.action(i,panel._id,'variants',data));
-    return this.send(i,message(`## Choose a role\n**${text(name)}**\n${text(audience)}\n\nSelecting a role saves this setting. Choose a role below Keyfi’s highest role.`,[roles],[row(back)]));
+    const controls=[back];
+    if(data.provider==='payhip' && data.catalogId) controls.push(button('Edit Product Secret…',await this.action(i,panel._id,'payhip-product',{catalogId:data.catalogId})));
+    return this.send(i,message(`## Choose a role\n**${text(name)}**\n${text(audience)}\n\nSelecting a role saves this setting. Choose a role below Keyfi’s highest role.`,[roles],[row(...controls)]));
   }
 }
