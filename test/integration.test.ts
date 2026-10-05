@@ -29,7 +29,6 @@ const discord:DiscordPort={administrator:async()=>{},validateRole:async()=>{},me
   removeRole:async(_g,u,r)=>{if(failRemoval)throw new Failure('discord_unavailable');roles.get(u)?.delete(r);removed++;}};
 const store:Store={_id:'store',provider:'gumroad',ownerId:'creator',credential:'',administrator:'123',status:'active',createdAt:new Date()};
 const panel:Panel={_id:'panel',guildId:'456',administrator:'123',stores:{gumroad:'store'},mappings:[{provider:'gumroad',productId:'product',roleId:'789',label:'Product'}],messages:[],active:true,createdAt:new Date()};
-// Buyer codes are scoped: one per store for purchases, one per server for roles.
 const subjectOf=(discordId:string,storeId='store')=>secrets.subject(discordId,`store:${storeId}`);
 const guildOf=(discordId:string,guildId='456')=>secrets.subject(discordId,`guild:${guildId}`);
 const memberOf=async(discordId:string,guildId='456')=>`${guildId}:${await guildOf(discordId,guildId)}`;
@@ -266,7 +265,6 @@ for(const unavailable of [false,true])test(`Check Purchases finishes in the same
   await db.catalog.insertOne({_id:'catalog',storeId:'store',productId:'product',name:'Purchased Avatar',membership:false,licensed:true,variants:[],fetchedAt:new Date()});
   await service.claim(panel,'111',entitlement());await service.reconcile(await memberOf('111'));
   await db.claims.updateMany({},{$set:{checkedAt:new Date(Date.now()-60_000)}});
-  // Another buyer's scheduled check and private purchase must not be included.
   await service.claim(panel,'222',{...entitlement(),entitlementId:'license:other',referenceId:'PRIVATE-OTHER-PURCHASE'});
   const h=ui({user:{id:'111'},permissions:'0'});
   await (await h.interactions.prepare(h.input({type:3,message:{id:'public'},data:{custom_id:'keyfi:verification'}}))).work!();
@@ -1096,7 +1094,6 @@ test('a copy of the database cannot join one buyer across creators and servers',
   await service.claim(otherPanel,'111',{...entitlement(),storeId:'other-store',ownerId:'other-creator',entitlementId:'license:elsewhere'});
   await service.linkBuyer('111',await secrets.hash('gumroad-buyer','store','gum-user'),await service.subjectEpoch('111','store'),'store');
   await service.linkBuyer('111',await secrets.hash('gumroad-buyer','other-store','gum-user'),await service.subjectEpoch('111','other-store'),'other-store');
-  // Every identifier stored for the first creator's server, and for the second's.
   const values=async(storeId:string,guildId:string)=>{
     const docs=[...await db.claims.find({storeId}).toArray(),...await db.bindings.find({guildId}).toArray(),...await db.members.find({guildId}).toArray(),
       ...await db.subjects.find({_id:await subjectOf('111',storeId)}).toArray()];
@@ -1105,7 +1102,6 @@ test('a copy of the database cannot join one buyer across creators and servers',
   const first=await values('store','456'),second=await values('other-store','999');
   assert.ok(first.size>=4&&second.size>=4);
   assert.deepEqual([...first].filter(v=>second.has(v)),[],'no stored code links the two');
-  // The person is still recognized everywhere when present: export and deletion cover both.
   const data=await service.exportSubject('111');
   assert.deepEqual(data.servers.map(s=>s.server).sort(),['456','999']);assert.equal(data.purchases.length,2);
   await service.requestDeletion('111');await finishAll();
@@ -1122,7 +1118,6 @@ test('stored buyer data never contains a readable Discord ID or purchase ID',asy
   assert.equal((await service.entitlementOf(claim)).referenceId,'REFERENCE-CANARY');
   assert.equal((await service.exportSubject(discordId)).purchases[0]!.saleId,'SALE-CANARY');
   assert.equal(await db.db.collection('__keyVault').countDocuments(),0);
-  // An encrypted Discord ID copied onto another member cannot be opened there.
   const member=(await db.members.findOne({_id:await memberOf(discordId)}))!;
   await assert.rejects(secrets.open(member.discord!,await guildOf('111')));
 });

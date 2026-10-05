@@ -30,7 +30,6 @@ export class Jinxxy implements StoreAdapter {
     if (item.target_id !== item.item.id || item.target_version_id !== (item.item.version?.id ?? null)) throw new Failure('provider_schema');
     const status = item.order?.payment_status;
     // TODO: Contract-test suspension/revocation when Jinxxy documents its representation.
-    // Paid/refunded verification remains functional; HTTP success alone never grants access.
     const eligibility = status === 'REFUNDED' ? 'ineligible'
       : item.grant_type === 'ORDER_ITEM' && status === 'PAID' ? 'eligible' : 'unknown';
     return {provider: 'jinxxy', storeId: store._id, ownerId: store.ownerId, entitlementId: `license:${license.id}`, referenceId: license.id,

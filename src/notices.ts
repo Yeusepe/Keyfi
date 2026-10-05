@@ -1,4 +1,3 @@
-// Bump TERMS_VERSION when the terms change.
 export const TERMS_VERSION = '1';
 
 export const buyerNotice = (contact: string) => `## Privacy

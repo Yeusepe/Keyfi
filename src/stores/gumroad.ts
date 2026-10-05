@@ -58,7 +58,6 @@ export class Gumroad implements StoreAdapter {
     if (entitlement.membership) return this.membership(store, entitlement.referenceId, entitlement, false);
     return entitlement;
   }
-  // ponytail: one request per mapped membership product; batch if panels map many.
   async membershipKey(store: Store, productIds: string[], key: string): Promise<Entitlement | null> {
     for (const productId of productIds) {
       let raw: unknown;

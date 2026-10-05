@@ -12,7 +12,6 @@ import { createServer } from './server.js';
 import { Jobs } from './jobs.js';
 import { migratePurchaseData } from './purchase-storage.js';
 
-// Last-resort failures must never dump request objects or credential-bearing URLs.
 const fatal=()=>{process.stderr.write('keyfi_fatal\n');process.exit(1);};
 process.on('uncaughtException',fatal);
 process.on('unhandledRejection',fatal);

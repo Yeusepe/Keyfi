@@ -14,7 +14,6 @@ export class Secrets {
   async hash(kind: string, ...parts: string[]): Promise<string> {
     return createHmac('sha256', this.indexKey).update(JSON.stringify([kind, ...parts])).digest('hex');
   }
-  // Scope buyer codes to one store or server.
   subject(discordId: string, scope: string) { return this.hash('discord', scope, discordId); }
   async seal(value: string, context: string): Promise<string> {
     const nonce = randomBytes(12), cipher = createCipheriv('aes-256-gcm', this.dataKey, nonce);

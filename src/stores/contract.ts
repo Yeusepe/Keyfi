@@ -12,7 +12,6 @@ export interface StoreAdapter {
   membershipKey?(store: Store, productIds: string[], key: string): Promise<Entitlement | null>;
   readReference(store: Store, referenceId: string, membership?: boolean, background?: boolean): Promise<Entitlement>;
   recheck(store: Store, entitlement: Entitlement, background?: boolean): Promise<Entitlement>;
-  // Adapters return raw listings; Providers adds the normalized name key.
   catalogPage(store: Store, page?: number, cursor?: string): Promise<{products: Omit<CatalogProduct, 'nameKey'>[]; more: boolean; cursor?: string}>;
   versions(store: Store, product: CatalogProduct): Promise<CatalogProduct['variants']>;
   identify?(store: Store): Promise<string>;

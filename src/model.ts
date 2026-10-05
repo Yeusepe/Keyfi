@@ -44,7 +44,6 @@ export interface Member {
 }
 // Per-store buyer record: `_id` is the store-scoped code, never a raw Discord ID.
 export interface Subject { _id: string; deleting: boolean; revision: number; epoch: string; gumroadHash?: string; }
-// Short-lived list of one person's records while their deletion completes.
 export interface Deletion { _id: string; subjects: string[]; guildSubjects: string[]; createdAt: Date; }
 export interface Lookup {
   _id: string; storeId: string; productId: string; referenceId: string;

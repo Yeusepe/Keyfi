@@ -16,7 +16,6 @@ export const button = (label: string, customId: string, style = ButtonStyle.Seco
 export const display = (copy: string) => new TextDisplayBuilder().setContent(copy);
 export const section = (copy: string, accessory: ButtonBuilder) => new SectionBuilder().addTextDisplayComponents(display(copy)).setButtonAccessory(accessory);
 export const divider = () => new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small);
-// Keep navigation apart from the content and its contextual controls.
 export const message = (copy: string | SectionBuilder, content: ContainerComponentBuilder[] = [], navigation: ContainerComponentBuilder[] = []) => ({flags, attachments: [], allowed_mentions: {parse: []}, components: [new ContainerBuilder().spliceComponents(0,0,typeof copy==='string'?display(copy):copy,...content,...(navigation.length?[divider(),...navigation]:[])).toJSON()]});
 export const accessRow = () => row(button('Manage Access','keyfi:verification'));
 const privileged = PermissionFlagsBits.Administrator | PermissionFlagsBits.ManageGuild | PermissionFlagsBits.ManageRoles | PermissionFlagsBits.ManageChannels

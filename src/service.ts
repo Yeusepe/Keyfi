@@ -63,7 +63,6 @@ export class Service {
   guildSubject(discordId: string, guildId: string) { return this.secrets.subject(discordId, `guild:${guildId}`); }
   // Delete, export and the access view run with the person present, so their codes for
   // every store and server are derived on demand; nothing stored joins them.
-  // ponytail: one HMAC per store and server; keep a scope index if Keyfi outgrows a few thousand.
   async codes(discordId: string) {
     const [storeIds, panelGuilds, memberGuilds] = await Promise.all([this.db.stores.distinct('_id'), this.db.panels.distinct('guildId'), this.db.members.distinct('guildId')]);
     const guildIds = [...new Set([...panelGuilds, ...memberGuilds])];
@@ -107,9 +106,7 @@ export class Service {
     const roles = this.roles(panel, e);
     if (!roles.length) throw new Failure('unmapped_product');
     const claimId = await this.secrets.hash('claim', e.storeId, e.entitlementId);
-    // Purchases use the store-scoped code; server records use the server-scoped code.
     const s = await this.storeSubject(discordId, e.storeId), g = await this.guildSubject(discordId, panel.guildId), memberId = `${panel.guildId}:${g}`;
-    // The Discord ID is stored encrypted, bound to this server record, for role changes only.
     const discord = await this.db.members.countDocuments({_id: memberId, discord: {$exists: true}}) ? undefined : await this.secrets.seal(discordId, g);
     const stored = await this.storedClaim(claimId, e, s, nextCheck(e));
     await this.db.transaction(async session => {
@@ -166,7 +163,6 @@ export class Service {
     }
     return {done:!match,roles:[...roles],cursor:match?._id};
   }
-  // The Gumroad link belongs to one creator's store; other creators never see it.
   async linkBuyer(discordId: string, hash: string, epoch: string, storeId: string) {
     const s = await this.storeSubject(discordId, storeId);
     await this.db.transaction(async session => {
@@ -175,7 +171,6 @@ export class Service {
       await this.db.optouts.deleteOne({_id: hash}, {session});
     });
   }
-  // The buyer index serves only Gumroad sign-in. Without it, keep none of it.
   async reconcileIndex() {
     if (!this.buyerOAuthEnabled) { await this.db.sync.deleteMany({}); await this.db.lookups.deleteMany({}); return; }
     for (const panel of await this.db.panels.find({active: true, 'stores.gumroad': {$exists: true}}).toArray())
@@ -195,7 +190,6 @@ export class Service {
         eligibility: c.eligibility, lastChecked: c.checkedAt, validUntil: c.validUntil ?? null, nextCheck: c.nextCheckAt})),
       servers: bindings.map(b => ({server: b.guildId, panel: b.panelId, purchase: b.claimId})),
       roles: members.map(m => ({server: m.guildId, managedRoles: m.managedRoles, updatePending: m.dirty})),
-      // Each code is scoped to one store or one server; none is shared between them.
       pseudonymousIdentifiers: {
         stores: codes.byStore.filter(x => subjects.some(y => y._id === x.code)).map(x => ({store: x.storeId, code: x.code, gumroadAccount: subjects.find(y => y._id === x.code)?.gumroadHash ?? null})),
         servers: codes.byGuild.filter(x => members.some(m => m.subject === x.code)).map(x => ({server: x.guildId, code: x.code})),
@@ -300,8 +294,6 @@ export class Service {
     });
   }
   private get deletions() { return this.db.db.collection<Deletion>('deletions'); }
-  // The person is present, so every store and server code is known now. The list that
-  // joins them lives only until deletion finishes.
   async requestDeletion(discordId: string) {
     const codes = await this.codes(discordId);
     await this.db.transaction(async session => {
@@ -318,7 +310,6 @@ export class Service {
     });
   }
   pendingDeletions(limit: number) { return this.deletions.find().sort({createdAt: 1}).limit(limit).toArray(); }
-  // Runs in the background from the deletion list alone; no Discord ID is needed until roles change.
   async finishDeletion(deletionId: string) {
     await this.db.withLease(`delete:${deletionId}`, async () => {
       const deletion = await this.deletions.findOne({_id: deletionId}); if (!deletion) return;
