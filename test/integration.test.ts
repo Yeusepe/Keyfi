@@ -1448,6 +1448,8 @@ test('Payhip partial refunds and missing keys require review without guessing bu
     assert.equal(await db.revocations.countDocuments(),0);
     assert.equal((await db.stores.findOne({_id:p.store._id}))?.webhookReview,true);
   }
+  const h=ui(),manage=await h.interactions.prepare(await h.action('store',{}, {provider:'payhip'})); await manage.work!();
+  assert.ok(h.view().controls.some(c=>c.label==='Mark Reviewed'));
 });
 
 test('Payhip freshly disabled keys remove existing access and are not background-polled',async()=>{
@@ -1466,8 +1468,9 @@ test('Payhip setup allows first manual product, secret rotation, and scoped manu
   const h=ui();
   const connect=await h.interactions.prepare(await h.action('connect-store',{}, {provider:'payhip'})); assert.equal((connect.response as any).type,9);
   const submit=await h.interactions.prepare(await h.action('credential-submit',{type:5,data:{components:[{custom_id:'value',value:payhipAccount}]}},{provider:'payhip'})); await submit.work!();
-  assert.ok(h.view().copy.includes('/webhooks/payhip/')); assert.ok(h.view().copy.includes('Awaiting an authenticated event'));
-  const p=await service.panel(panel._id); await h.interactions.settings(h.input(),p);
+  assert.ok(h.view().copy.includes('/webhooks/payhip/')); assert.ok(h.view().copy.includes('Waiting for the first Payhip update'));
+  await h.click('Continue to Setup');
+  const p=await service.panel(panel._id);
   assert.equal(h.view().controls.find(c=>c.label==='Choose Product…').disabled,false);
   const productForm=await h.interactions.prepare(await h.action('payhip-product')); assert.equal((productForm.response as any).type,9);
   const fields=(secret:string)=>['product','name','secret'].map((custom_id,n)=>({custom_id,value:['AbC12','Payhip Product',secret][n]}));

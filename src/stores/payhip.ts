@@ -21,7 +21,7 @@ export const payhipLicenseHash = (secrets: Secrets, storeId: string, productId: 
 const license = z.object({data:z.object({enabled:z.boolean(), product_link:z.string(), license_key:z.string().min(1).max(100), variant_id:z.union([z.string(),z.number()]).nullish()})});
 export const payhip: StoreDefinition = {
   id:'payhip', name:'Payhip',
-  connection:{type:'api-key',description:'Your Payhip account API key authenticates refund webhooks. Product secrets are added next.'},
+  connection:{type:'api-key',description:'Copy the API key from Payhip → Account → Settings → Developer to receive refund updates.'},
   productSecrets:true, eventDriven:true,
   apiBase:'https://payhip.com/api/v2', headers:token=>({'product-secret-key':token}),
   budget:{total:90,interactive:75,background:15}, maxResponseBytes:()=>32_768,

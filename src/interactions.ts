@@ -103,11 +103,11 @@ export class Interactions {
         if(action.action==='payhip-revoke') return {response:this.modal(await this.action(i,panel._id,'payhip-revoke-buyer'),'Find Payhip verification','Buyer Discord user ID','Enter the buyer’s Discord user ID to choose a purchase to revoke.')};
         const product=action.data?.catalogId?await this.db.catalog.findOne({_id:action.data.catalogId,storeId:panel.stores.payhip}):null;
         if(action.data?.catalogId && !product) throw new Failure('expired');
-        const modal=new ModalBuilder().setCustomId(await this.action(i,panel._id,'payhip-product-submit',action.data)).setTitle('Payhip product');
+        const modal=new ModalBuilder().setCustomId(await this.action(i,panel._id,'payhip-product-submit',action.data)).setTitle(product?.credential?'Edit Payhip product':'Add Payhip product');
         for(const [field,label,description,value,required,max] of [
-          ['product','Product URL or permalink','Use the payhip.com/b/… link.',product?.productId??'',true,250],
-          ['name','Product name','Shown when choosing a buyer role.',product?.name.slice(0,150)??'',true,150],
-          ['secret','Product secret key','Payhip → Edit product → Advanced options. Leave blank to keep the saved secret.','',!product?.credential,512],
+          ['product','Product link','Enter the Payhip link, such as https://payhip.com/b/AbC12, or its code: AbC12.',product?.productId??'',true,250],
+          ['name','Product name','Use a name you’ll recognize when choosing buyer roles in Keyfi.',product?.name.slice(0,150)??'',true,150],
+          ['secret','Product secret key',product?.credential?'Paste a new product secret, or leave this field blank to keep the saved one.':'In Payhip, open Edit product → Advanced options. Enable license keys and save to see the secret.','',!product?.credential,512],
         ] as const) {
           const input=new TextInputBuilder().setCustomId(field).setStyle(TextInputStyle.Short).setRequired(required).setMaxLength(max);
           if(value) input.setValue(value);
@@ -145,7 +145,7 @@ export class Interactions {
     const storeIds=Object.values(panel.stores), count=await this.db.catalog.countDocuments({storeId:{$in:storeIds}});
     const tasks=await this.db.catalogJobs.find({_id:{$in:storeIds},syncing:{$ne:false}}).toArray();
     const step=!storeIds.length?'1 of 3 · Connect a store':!panel.mappings.length?'2 of 3 · Choose a product and role':panel.messages.length?'Buyer panel published':'3 of 3 · Publish verification';
-    const sync=tasks.some(t=>t.error==='store_reconnect')?'Reconnect a store to resume syncing.':tasks.some(t=>t.error)?'Sync delayed. Retrying automatically.':tasks.length?'Syncing products…':`${count} ${count===1?'product':'products'} available.`;
+    const sync=tasks.some(t=>t.error==='store_reconnect')?'Reconnect a store to resume syncing.':tasks.some(t=>t.error)?'Sync delayed. Retrying automatically.':tasks.length?'Syncing products…':!count&&panel.stores.payhip?'Add a Payhip product to choose the role its buyers receive.':`${count} ${count===1?'product':'products'} available.`;
     let account='';
     if(panel.mappings.some(m=>storeDefinition(m.provider).buyerSignIn)) {
       if(!this.service.buyerOAuthEnabled) account='Account sign-in is unavailable. License keys work now.';
@@ -158,7 +158,7 @@ export class Interactions {
         account=`Preparing account sign-in: ${purchases.toLocaleString('en-US')} purchases indexed · ${scans.filter(s=>s.initialComplete).length} of ${query.productId.$in.length} products ready. ${status} License keys work now.`;
       }
     }
-    const copy=`## Verification setup\n${step}`;
+    const copy=`## Verification setup\n${step}${!storeIds.length?'\nConnect a store, choose which Discord roles its buyers receive, then publish a verification message.':''}`;
     return {copy,count,sync,account,signature:JSON.stringify([copy,count,sync,account,panel.stores,panel.mappings,panel.messages])};
   }
   private async watch(i: Interaction, panel: Panel, signature: string, waitingForOAuth=false) {
@@ -212,7 +212,7 @@ export class Interactions {
     const sections=[];
     for(const definition of storeDefinitions.values()) {
       const connected=!!panel.stores[definition.id];
-      sections.push(section(`**${definition.name}**\n${connected?'Connected':definition.connection.type==='oauth'?'Connect your creator account.':definition.connection.description}`,
+      sections.push(section(`**${definition.name}**\n${connected?definition.id==='payhip'?'API key saved. Manage products and refund updates.':'Connected':definition.connection.type==='oauth'?'Connect your creator account.':definition.connection.description}${definition.id==='payhip'&&!connected?'\n[Open Payhip Settings](https://payhip.com/settings/developer)':''}`,
         button(`${connected?'Manage':'Connect'} ${definition.name}`,await this.action(i,panel._id,connected?'store':'connect-store',{provider:definition.id}))));
     }
     return sections;
@@ -238,7 +238,7 @@ export class Interactions {
     const nav = [button('Filter Products…', await this.action(i, panel._id, 'search'))];
     if(panel.stores.payhip) nav.push(button('Add Payhip Product…',await this.action(i,panel._id,'payhip-product')));
     if(search) nav.push(button('Clear Filter',await this.action(i,panel._id,'products',{page:'0'})));
-    const copy = `## Choose a product\n${search?`Filter: **${text(search)}**\n`:''}${products.length?`${paging.label} products\nChoose a product, then its buyer role.`:search?'No products match. Change or clear the filter.':panel.stores.payhip?'Add a Payhip product below. Products also appear after a payment or refund webhook.':'No products available yet. Check sync progress in setup.'}`;
+    const copy = `## Choose a product\n${search?`Filter: **${text(search)}**\n`:''}${products.length?`${paging.label} products\nChoose a product, then its buyer role.`:search?'No products match. Change or clear the filter.':panel.stores.payhip?'Choose **Add Payhip Product…** to enter a product link and its secret key. You can add products before the first sale.':'No products available yet. Check sync progress in setup.'}`;
     return this.select(i, copy, action, products.map(p => ({label: p.name, value: p._id, description: `${providerFor(panel,p.storeId).name}${p.mapped?' · Added':''}`})),
       [...await this.pagination(i,panel._id,'products',paging,{search}),row(...nav),divider(),row(button('Back to Product Roles',await this.action(i,panel._id,'roles')))],'Choose a product');
   }
@@ -397,7 +397,7 @@ export class Interactions {
     }
     if(action.action==='stores' || action.action==='manage') return this.send(i,message('## Stores', [
       ...await this.connections(i,panel),divider(),
-      section('**Product updates**\nGumroad and Jinxxy sync every six hours. Payhip products arrive through webhooks or manual entry.',button('Sync Now',await this.action(i,panel._id,'sync')).setDisabled(!Object.keys(panel.stores).some(p=>!storeDefinition(p).eventDriven))),
+      section('**Product updates**\nGumroad and Jinxxy sync every six hours. For Payhip, add a product or wait for a payment or refund update.',button('Sync Now',await this.action(i,panel._id,'sync')).setDisabled(!Object.keys(panel.stores).some(p=>!storeDefinition(p).eventDriven))),
     ],[row(await this.back(i,panel._id))]));
     if(action.action==='store') {
       const definition=storeDefinition(action.data?.provider??'');
@@ -406,14 +406,15 @@ export class Interactions {
       if(definition.id==='payhip') {
         const store=await this.db.stores.findOne({_id:panel.stores.payhip,status:'active'}); if(!store?.webhookToken) throw new Failure('expired');
         const url=`${this.baseUrl}/webhooks/payhip/${await this.service.secrets.open(store.webhookToken,store._id)}`;
-        payhipSections.push(display(`**Refund webhooks**\nAdd this URL in Payhip → Account → Settings → Developer for paid and refunded events. Keep it private.\n\n${url}\n\n${store.webhookReceivedAt?`Last authenticated event <t:${Math.floor(store.webhookReceivedAt.getTime()/1000)}:R>.`:'Awaiting an authenticated event. The account API key cannot be checked until an event arrives.'}`),
-          section('**Products**\nAdd a product link and its v2 secret, or choose a discovered product to set its secret.',button('Add Payhip Product…',await this.action(i,panel._id,'payhip-product'))),
-          section('**Manual revocation**\nUse for missed refunds or licenses disabled directly in Payhip. Partial refunds need your review.',button('Find Buyer…',await this.action(i,panel._id,'payhip-revoke'))));
-        if(store.webhookReview) payhipSections.push(section('**Refund review needed**\nA partial refund or refund without a license key arrived. Review your Payhip sales and revoke verification here if needed.',button('Mark Reviewed',await this.action(i,panel._id,'payhip-review-done'))));
+        payhipSections.push(display(`**1. Set up refund updates**\nOpen [Payhip developer settings](https://payhip.com/settings/developer). Paste this URL into the webhook field, select **paid** and **refunded**, and save. This lets Keyfi update buyer roles after a refund.\n\n\`${url}\`\n\nKeep any existing URLs and separate them with commas. Keep this URL private.\n\n${store.webhookReceivedAt?`Last Payhip update received <t:${Math.floor(store.webhookReceivedAt.getTime()/1000)}:R>.`:'Waiting for the first Payhip update. You can add products now. Keyfi can confirm this connection after the next payment or refund.'}`),
+          section('**2. Add a product and buyer role**\nOpen [Payhip products](https://payhip.com/products) and choose **Edit → Advanced options** for the product. Enable license keys and save to see the **product secret key**. Add the product here with its link and secret, then choose the role buyers receive.',button('Add Payhip Product…',await this.action(i,panel._id,'payhip-product'))),
+          section('**3. Publish verification**\nOpen **/keyfi setup** in the Discord channel buyers will use, then choose **Publish Verification**. Buyers can enter their license key in that message to receive their role.',button('Continue to Setup',await this.action(i,panel._id,'settings'))),divider(),
+          section('**Remove buyer access**\nIf a refund was missed or you disabled a license in Payhip, find the buyer and revoke the purchase’s verification. Other valid purchases keep their roles.',button('Find Buyer…',await this.action(i,panel._id,'payhip-revoke'))));
+        if(store.webhookReview) payhipSections.push(section('**Review a refund**\nPayhip sent a partial refund or a refund without a license key. Check the sale in Payhip, then use **Find Buyer…** if access should be removed. Choose **Mark Reviewed** when you’re done.',button('Mark Reviewed',await this.action(i,panel._id,'payhip-review-done'))));
       }
-      return this.send(i,message(`## ${definition.name}\nConnected to this verification panel.`,[
+      return this.send(i,message(`## ${definition.name}\n${definition.id==='payhip'?'Account API key saved. Set up refund updates and choose the products buyers can verify.':'Connected to this verification panel.'}`,[
         ...payhipSections,
-        section('**Connection**\nAuthorize the store again if its credentials have changed.',button(`Reconnect ${definition.name}`,await this.action(i,panel._id,'connect-store',{provider:definition.id}))),divider(),
+        section(`**Connection**\n${definition.id==='payhip'?'If you replace the account API key in Payhip, reconnect here with the new key.':'Authorize the store again if its credentials have changed.'}`,button(`Reconnect ${definition.name}`,await this.action(i,panel._id,'connect-store',{provider:definition.id}))),divider(),
         section('**Disconnect store**\nRemove this store and the roles it grants through this panel.',button('Disconnect…',await this.action(i,panel._id,'disconnect-confirm',{provider:definition.id}))),
       ],[row(button('Back to Stores',await this.action(i,panel._id,'stores')))]));
     }
@@ -440,7 +441,7 @@ export class Interactions {
     if (action.action === 'product-selected' || action.action === 'single-product' || action.action === 'variants') {
       const p = await this.db.catalog.findOne({_id: action.action==='product-selected' ? selected : action.data?.catalogId, storeId: {$in: Object.values(panel.stores)}}); if (!p) throw new Failure('expired');
       const provider = providerFor(panel,p.storeId).id;
-      if(provider==='payhip' && !p.credential) return this.send(i,message(`## Set the product secret\n**${text(p.name)}**\nPayhip requires a secret for each product. Copy it from the product’s Advanced options.`,[
+      if(provider==='payhip' && !p.credential) return this.send(i,message(`## Add a product secret\n**${text(p.name)}**\nKeyfi needs this product’s secret to check buyer license keys. In Payhip, open **Edit → Advanced options**, enable license keys, and save the product. Copy the **product secret key**, then add it here to choose a buyer role.`,[
         row(button('Set Product Secret…',await this.action(i,panel._id,'payhip-product',{catalogId:p._id}),ButtonStyle.Primary)),
       ]));
       if(action.action==='product-selected' && await this.suggestStores(i,panel,p._id,action.data??{})) return;
@@ -593,6 +594,6 @@ export class Interactions {
       button('Back to Buyers',await this.action(i,panel._id,'variants',data));
     const controls=[back];
     if(data.provider==='payhip' && data.catalogId) controls.push(button('Edit Product Secret…',await this.action(i,panel._id,'payhip-product',{catalogId:data.catalogId})));
-    return this.send(i,message(`## Choose a role\n**${text(name)}**\n${text(audience)}\n\nSelecting a role saves this setting. Choose a role below Keyfi’s highest role.`,[roles],[row(...controls)]));
+    return this.send(i,message(`## Choose a role\n**${text(name)}**\n${text(audience)}\n\nChoose the Discord role buyers receive after verification. Selecting a role saves it. The role must be below both your highest role and Keyfi’s role, with no moderation permissions.`,[roles],[row(...controls)]));
   }
 }
