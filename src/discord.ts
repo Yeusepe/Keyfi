@@ -6,7 +6,7 @@ import { storeDefinitions } from './stores/registry.js';
 export interface DiscordPort {
   administrator(guildId: string, userId: string): Promise<void>;
   memberRoles(guildId: string, userId: string): Promise<string[]>;
-  validateRole(guildId: string, roleId: string): Promise<void>;
+  validateRole(guildId: string, roleId: string, actorId?: string): Promise<void>;
   addRole(guildId: string, userId: string, roleId: string): Promise<void>;
   removeRole(guildId: string, userId: string, roleId: string): Promise<void>;
 }
@@ -19,6 +19,13 @@ export const divider = () => new SeparatorBuilder().setDivider(true).setSpacing(
 // Keep navigation apart from the content and its contextual controls.
 export const message = (copy: string | SectionBuilder, content: ContainerComponentBuilder[] = [], navigation: ContainerComponentBuilder[] = []) => ({flags, attachments: [], allowed_mentions: {parse: []}, components: [new ContainerBuilder().spliceComponents(0,0,typeof copy==='string'?display(copy):copy,...content,...(navigation.length?[divider(),...navigation]:[])).toJSON()]});
 export const accessRow = () => row(button('Manage Access','keyfi:verification'));
+const privileged = PermissionFlagsBits.Administrator | PermissionFlagsBits.ManageGuild | PermissionFlagsBits.ManageRoles | PermissionFlagsBits.ManageChannels
+  | PermissionFlagsBits.ManageWebhooks | PermissionFlagsBits.ManageMessages | PermissionFlagsBits.BanMembers | PermissionFlagsBits.KickMembers
+  | PermissionFlagsBits.ModerateMembers | PermissionFlagsBits.MentionEveryone;
+function standing(roles: RESTGetAPIGuildRolesResult, guildId: string, memberRoles: string[]) {
+  const held = roles.filter(r => r.id === guildId || memberRoles.includes(r.id));
+  return {permissions: held.reduce((p,r) => p | BigInt(r.permissions), 0n), top: Math.max(0, ...held.filter(r => r.id !== guildId).map(r => r.position))};
+}
 export function panelMessage(panel: Panel, oauthReady: boolean) {
   const connected=[...storeDefinitions.values()].filter(d=>panel.stores[d.id]&&panel.mappings.some(m=>m.provider===d.id));
   const signIn=connected.find(d=>d.buyerSignIn);
@@ -60,24 +67,27 @@ export class DiscordApi implements DiscordPort {
     if (guild.owner_id === userId) return;
     const member = await this.call<RESTGetAPIGuildMemberResult>('get', Routes.guildMember(guildId, userId));
     const roles = await this.call<RESTGetAPIGuildRolesResult>('get', Routes.guildRoles(guildId));
-    const permissions = roles.filter(r => r.id === guildId || member.roles.includes(r.id)).reduce((p,r) => p | BigInt(r.permissions), 0n);
-    if (!(permissions & (PermissionFlagsBits.ManageGuild | PermissionFlagsBits.Administrator))) throw new Failure('admin_required');
+    if (!(standing(roles, guildId, member.roles).permissions & (PermissionFlagsBits.ManageGuild | PermissionFlagsBits.Administrator))) throw new Failure('admin_required');
   }
   async memberRoles(guildId: string, userId: string) {
     return (await this.call<RESTGetAPIGuildMemberResult>('get', Routes.guildMember(guildId, userId))).roles;
   }
-  async validateRole(guildId: string, roleId: string) {
+  // Without the actor check, Keyfi's high role lets Manage Server grant roles the actor couldn't.
+  async validateRole(guildId: string, roleId: string, actorId?: string) {
     this.botId ??= (await this.call<{id: string}>('get', Routes.user('@me'))).id;
-    const [roles, member] = await Promise.all([
+    const [roles, member, guild, actor] = await Promise.all([
       this.call<RESTGetAPIGuildRolesResult>('get', Routes.guildRoles(guildId)),
       this.call<RESTGetAPIGuildMemberResult>('get', Routes.guildMember(guildId, this.botId)),
+      actorId ? this.call<{owner_id: string}>('get', Routes.guild(guildId)) : undefined,
+      actorId ? this.call<RESTGetAPIGuildMemberResult>('get', Routes.guildMember(guildId, actorId)) : undefined,
     ]);
-    const role = roles.find(r => r.id === roleId);
-    const botRoles = roles.filter(r => member.roles.includes(r.id));
-    const top = Math.max(0, ...botRoles.map(r => r.position));
-    const permissions = roles.filter(r => r.id === guildId || member.roles.includes(r.id)).reduce((p,r) => p | BigInt(r.permissions), 0n);
-    if (!role || role.id === guildId || role.managed || role.position >= top || (BigInt(role.permissions) & PermissionFlagsBits.Administrator)
-      || !(permissions & (PermissionFlagsBits.ManageRoles | PermissionFlagsBits.Administrator))) throw new Failure('role_unassignable');
+    const role = roles.find(r => r.id === roleId), bot = standing(roles, guildId, member.roles);
+    if (!role || role.id === guildId || role.managed || role.position >= bot.top || (BigInt(role.permissions) & privileged)
+      || !(bot.permissions & (PermissionFlagsBits.ManageRoles | PermissionFlagsBits.Administrator))) throw new Failure('role_unassignable');
+    if (actor && guild?.owner_id !== actorId) {
+      const person = standing(roles, guildId, actor.roles);
+      if (role.position >= person.top || !(person.permissions & (PermissionFlagsBits.ManageRoles | PermissionFlagsBits.Administrator))) throw new Failure('role_unassignable');
+    }
   }
   async addRole(guild: string, user: string, role: string) { await this.call('put', Routes.guildMemberRole(guild, user, role)); }
   async removeRole(guild: string, user: string, role: string) { await this.call('delete', Routes.guildMemberRole(guild, user, role)); }
@@ -99,7 +109,7 @@ export function errorCopy(code: string): string {
     message_missing: 'This Discord message was deleted. Open **/keyfi setup** to publish the buyer panel again.',
     deleting: 'Your data deletion is in progress. Access must be removed before you can verify again.',
     expired: '## Action expired\nReturn to the creator’s verification message, or run the command again.',
-    admin_required: 'You need Manage Server permission to configure verification.', role_unassignable: 'Choose a non-administrator role below the bot’s highest role, and give the bot Manage Roles permission.',
+    admin_required: 'You need Manage Server permission to configure verification.', role_unassignable: 'Choose a role below both your highest role and the bot’s, without moderator or server-management permissions. You and the bot both need Manage Roles.',
     index_pending: 'Gumroad account verification is still preparing. You can enter a license key now.',
     discord_identity_mismatch: 'Sign in with the same Discord account that started verification.',
     oauth_not_configured: 'Gumroad sign-in is unavailable. Use a license key, or contact the creator.',

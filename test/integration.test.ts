@@ -19,7 +19,7 @@ import { migratePurchaseData } from '../src/purchase-storage.js';
 import { DiscordApi, panelMessage, type DiscordPort } from '../src/discord.js';
 import type { Entitlement, Panel, Store } from '../src/model.js';
 import { Interactions, interactionSchema, type Interaction } from '../src/interactions.js';
-import { ButtonStyle, MessageFlags } from 'discord.js';
+import { ButtonStyle, MessageFlags, PermissionFlagsBits } from 'discord.js';
 
 let mongo:MongoMemoryReplSet,client:MongoClient,db:Database,service:Service;
 let secrets:Secrets;
@@ -100,6 +100,29 @@ test('startup restores a missing interaction endpoint and verifies the applicati
   await api.ensureInteractions('https://keyfi.example','public-key');assert.equal(writes,2);
   await assert.rejects(api.ensureInteractions('https://keyfi.example','wrong-key'),{message:'discord_configuration'});assert.equal(writes,2);
   application.id='456';await assert.rejects(api.ensureInteractions('https://keyfi.example','public-key'),{message:'discord_configuration'});
+});
+test('buyer roles must be assignable by the mapping admin and carry no moderation powers',async()=>{
+  const api=new DiscordApi('test-token','123'),P=PermissionFlagsBits;
+  const role=(id:string,position:number,permissions=0n)=>({id,position,permissions:String(permissions),managed:false});
+  const roles=[role('g',0),role('bot',10,P.ManageRoles),role('mod',5,P.BanMembers),role('helper',4,P.ManageRoles),role('vip',3),role('high',6),role('manager',2,P.ManageGuild)];
+  const members:Record<string,string[]>={bot:['bot'],owner:[],helper:['helper'],manager:['manager']};
+  api.call=async <T>(_method:string,route:string):Promise<T>=>{
+    if(route==='/users/%40me') return {id:'bot'} as T;
+    if(route==='/guilds/g/roles') return roles as T;
+    if(route==='/guilds/g') return {owner_id:'owner'} as T;
+    return {roles:members[route.split('/').at(-1)!]} as T;
+  };
+  await api.validateRole('g','vip');
+  await api.validateRole('g','vip','helper');
+  await api.validateRole('g','high','owner');
+  for(const [roleId,actor] of [['mod','owner'],['mod',undefined],['vip','manager'],['high','helper'],['helper','helper']] as const)
+    await assert.rejects(api.validateRole('g',roleId,actor),{message:'role_unassignable'},`${roleId} by ${actor}`);
+});
+test('mapping a role checks it against the panel administrator',async()=>{
+  const seen:(string|undefined)[]=[];
+  const s=new Service(db,service.providers,{...discord,validateRole:async(_g,_r,actor)=>{seen.push(actor);}},secrets);
+  await s.addMapping(panel,{provider:'gumroad',productId:'product',roleId:'790',label:'Product'});
+  assert.deepEqual(seen,['123']);
 });
 
 test('regular members cannot use setup commands, admin buttons, or admin modal submissions',async()=>{

@@ -218,7 +218,7 @@ export class Service {
   }
   addMapping(panel: Panel, mapping: Mapping) { return this.addMappings(panel,[mapping]); }
   private async addMappings(panel: Panel, additions: Mapping[], products: {id:string;nameKey:string}[] = []) {
-    for(const roleId of new Set(additions.map(m=>m.roleId))) await this.discord.validateRole(panel.guildId,roleId);
+    for(const roleId of new Set(additions.map(m=>m.roleId))) await this.discord.validateRole(panel.guildId,roleId,panel.administrator);
     await this.db.transaction(async session => {
       const current = await this.db.panels.findOne({_id: panel._id, active: true}, {session});
       if (!current || additions.some(m=>!current.stores[m.provider] || current.stores[m.provider]!==panel.stores[m.provider])) throw new Failure('expired');
