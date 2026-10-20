@@ -1,4 +1,5 @@
-FROM mongo:8.0.16
+FROM mongo:8.0.34
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY deploy/mongo-entrypoint.sh /opt/keyfi/entrypoint.sh
 COPY deploy/mongo-init.js /opt/keyfi/init.js
 RUN chmod 755 /opt/keyfi/entrypoint.sh
