@@ -37,7 +37,7 @@ Requires **Node 24**, **Docker**, and a public HTTPS URL.
    npm run dev
    ```
 
-4. In your Discord application, set **Interactions Endpoint URL** to `<BASE_URL>/interactions`. Install the bot with the `bot` and `applications.commands` scopes and **View Channels**, **Send Messages**, and **Manage Roles** permissions.
+4. In your Discord application, set **Interactions Endpoint URL** to `<BASE_URL>/interactions`. Under **Installation → Guild Install → Default Install Settings**, select the `bot` and `applications.commands` scopes and **View Channels**, **Send Messages**, and **Manage Roles** permissions. Authorize Keyfi in the server with those settings; a commands-only installation can show `/keyfi setup` without giving the bot server access.
 
 For Gumroad, create separate buyer and creator OAuth apps and enter their credentials and `DISCORD_CLIENT_SECRET` in `.env`. Register these redirect URLs, replacing `<BASE_URL>` with your public origin:
 
