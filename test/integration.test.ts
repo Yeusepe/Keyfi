@@ -1391,11 +1391,31 @@ test('Payhip verifies with a product secret, reserves the claim, and never store
 
 test('Payhip requester distinguishes empty verification from outages and invalid JSON',async()=>{
   const p=await setupPayhip();
-  for(const [body,status,expected] of [['',200,'key_not_found'],['not json',200,'provider_schema'],['{}',200,'provider_schema'],['',401,'payhip_product_secret'],['',500,'provider_unavailable']] as const) {
+  for(const [body,status,expected] of [['',200,'key_not_found'],['{"data":[],"error":true}',400,'key_not_found'],['{}',400,'provider_schema'],['{"data":[],"error":false}',400,'provider_schema'],['not json',400,'provider_schema'],['not json',200,'provider_schema'],['{}',200,'provider_schema'],['',401,'payhip_product_secret'],['',500,'provider_unavailable']] as const) {
     service.providers.request=createRequester(db,secrets,new Limits(db),async()=>new Response(body,{status}));
     await assert.rejects(service.verifyKey(p.panel,'111',payhipKey),{message:expected});
   }
   assert.equal(await db.claims.countDocuments(),0);
+});
+
+test('Payhip missing licenses do not block another mapped product or store',async()=>{
+  const p=await setupPayhip(),gumKey='01234567-89ABCDEF-01234567-89ABCDEF';
+  await service.savePayhipProduct(p.panel,'123','Other','Other product','SECOND-PRODUCT-SECRET');
+  await service.addMapping(p.panel,{provider:'payhip',productId:'Other',roleId:'790',label:'Other product'});
+  await db.panels.updateOne({_id:panel._id},{$set:{'stores.gumroad':'store'}});
+  let current=await service.panel(panel._id);
+  await service.addMapping(current,panel.mappings[0]!);current=await service.panel(panel._id);
+  service.providers.request=createRequester(db,secrets,new Limits(db),async(url,options)=>{
+    const u=new URL(String(url));
+    if(u.hostname==='api.gumroad.com') return Response.json({success:true,sales:u.searchParams.get('license_key')===gumKey?[{id:'sale-1',seller_id:'creator',product_id:'product',license_key:gumKey,license_disabled:false,chargedback:false,access_revoked:false}]:[]});
+    if((options?.headers as Record<string,string>)['product-secret-key']==='SECOND-PRODUCT-SECRET' && u.searchParams.get('license_key')===payhipKey)
+      return Response.json({data:{enabled:true,product_link:'Other',license_key:payhipKey}});
+    return Response.json({data:[],error:true},{status:400});
+  });
+  assert.deepEqual(await service.verifyKey(current,'111',payhipKey),['790']);
+  assert.deepEqual(await service.verifyKey(current,'111',gumKey),['789']);
+  await service.reconcile(await memberOf('111'));
+  assert.deepEqual([...(roles.get('111')??[])].sort(),['789','790']);
 });
 
 test('Payhip scans only mapped products, preserves case, and rejects ambiguity and mismatches',async()=>{

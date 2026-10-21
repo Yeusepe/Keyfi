@@ -57,6 +57,11 @@ export function createRequester(db: Database, secrets: Secrets, limits: Limits, 
     }
     if (response.status === 401 || response.status === 403) throw new Failure('store_reconnect');
     if (response.status === 404) throw new Failure('provider_not_found');
+    if (store.provider === 'payhip' && path === '/license/verify' && (options.method ?? 'GET') === 'GET' && response.status === 400) {
+      const body = await readJson(response, definition.maxResponseBytes(path));
+      if (z.object({error: z.literal(true), data: z.tuple([])}).safeParse(body).success) return null;
+      throw new Failure('provider_schema');
+    }
     if (!response.ok) throw new Failure('provider_unavailable');
     // Never attach a URL, response body, or provider error to an exception.
     return readJson(response, definition.maxResponseBytes(path), options.allowEmpty);
