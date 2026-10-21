@@ -174,7 +174,7 @@ export class Interactions {
     }
     else {
       content.push(section(`**Stores**\n${state.sync}`,button('Stores',await this.action(i,panel._id,'stores'))));
-      content.push(section(`**Product roles**\n${panel.mappings.length?`${panel.mappings.length} configured. Add or change who receives a role.`:'Choose a product and the role its buyers receive.'}`,
+      content.push(section(`**Product roles**\n${panel.mappings.length?`${panel.mappings.length} configured. Add roles to a product or remove them separately.`:'Choose a product and the role its buyers receive.'}`,
         panel.mappings.length?button('Product Roles',await this.action(i,panel._id,'roles')):button('Choose Product…',await this.action(i,panel._id,'products',{page:'0'}),ButtonStyle.Primary).setDisabled(!state.count&&!panel.stores.payhip)));
       if(panel.mappings.length) {
         content.push(divider());
@@ -257,7 +257,7 @@ export class Interactions {
   private async productRoles(i: Interaction, panel: Panel, requested = 0, notice = '') {
     const paging=pageInfo(requested,panel.mappings.length,rolePageSize), mappings=panel.mappings.slice(paging.start,paging.end);
     const audiences=await this.mappingAudiences(panel,mappings);
-    const copy=`## Product roles\n${notice?notice+'\n\n':''}${mappings.length?`${paging.label} product roles`:'No product roles yet. Add a product to choose the role its buyers receive.'}`;
+    const copy=`## Product roles\n${notice?notice+'\n\n':''}${mappings.length?`${paging.label} product roles\nTo add another role, choose Add Product… and select the same product again.`:'No product roles yet. Add a product to choose the role its buyers receive.'}`;
     const entries=[];
     for(const [n,m] of mappings.entries()) entries.push(section(`**${text(optionText(m.label))}**\n${text(optionText(audiences[n]!))}\n<@&${m.roleId}>`,
       button('Remove…',await this.action(i,panel._id,'remove-selected',{page:String(paging.page),mapping:JSON.stringify(m)}))));
@@ -489,7 +489,7 @@ export class Interactions {
       }
       const p=await this.db.catalog.findOne({_id:action.data?.catalogId,storeId:{$in:Object.values(panel.stores)}}); if (!p || !selected) throw new Failure('expired');
       await this.service.addMapping(panel,{provider:action.data!.provider as Provider,productId:p.productId,variant:action.data!.variant || undefined,roleId:selected,label:p.name,membership:p.membership});
-      return this.settings(i,await this.service.panel(panel._id),'Product role saved. You can give this role to buyers of other products too.');
+      return this.settings(i,await this.service.panel(panel._id),'Product role saved. Select the same product again to add another role, or another product to share this role.');
     }
     if (action.action === 'publish') {
       if (!i.channel_id || !panel.mappings.length) throw new Failure('mapping_required');
@@ -594,6 +594,6 @@ export class Interactions {
       button('Back to Buyers',await this.action(i,panel._id,'variants',data));
     const controls=[back];
     if(data.provider==='payhip' && data.catalogId) controls.push(button('Edit Product Secret…',await this.action(i,panel._id,'payhip-product',{catalogId:data.catalogId})));
-    return this.send(i,message(`## Choose a role\n**${text(name)}**\n${text(audience)}\n\nChoose the Discord role buyers receive after verification. Selecting a role saves it. The role must be below both your highest role and Keyfi’s role, with no moderation permissions.`,[roles],[row(...controls)]));
+    return this.send(i,message(`## Choose a role\n**${text(name)}**\n${text(audience)}\n\nChoose a Discord role buyers receive after verification. Selecting a role adds it alongside this product’s existing roles. The role must be below both your highest role and Keyfi’s role, with no moderation permissions.`,[roles],[row(...controls)]));
   }
 }

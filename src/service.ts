@@ -287,7 +287,7 @@ export class Service {
             membership:!!mapping.membership,initialComplete:false,startedAt:new Date(),nextAt:new Date()}},{upsert:true,session});
         }
       }
-      const mappings=current.mappings.filter(m=>!additions.some(a=>m.provider===a.provider&&m.productId===a.productId&&(m.variant??undefined)===(a.variant??undefined)));
+      const mappings=current.mappings.filter(m=>!additions.some(a=>m.provider===a.provider&&m.productId===a.productId&&(m.variant??undefined)===(a.variant??undefined)&&m.roleId===a.roleId));
       await this.db.panels.updateOne({_id: panel._id}, {$set: {mappings: [...mappings, ...additions], refreshAt: new Date()}, $inc: {revision: 1}}, {session});
       for(const binding of await this.db.bindings.find({panelId:panel._id},{session}).toArray()) await this.db.dirty(binding.guildId,binding.subject,session);
     });

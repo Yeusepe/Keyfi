@@ -20,7 +20,7 @@ For Payhip refund updates, add the webhook URL shown in Keyfi to Payhip’s Deve
 
 Payhip partial refunds, missed updates, disabled licenses, and subscription cancellations need manual review. To remove access, open **Stores → Manage Payhip → Find Buyer…**, select the purchase, and choose **Revoke Verification**.
 
-Use `/keyfi edit` to manage panels. Buyers can manage their verification and delete their data with `/verification`.
+Use `/keyfi edit` to manage panels. In **Product Roles → Add Product…**, select the same product again to add another role. Existing roles stay mapped, and each can be removed separately. Buyers can manage their verification and delete their data with `/verification`.
 
 ## Run your own bot
 

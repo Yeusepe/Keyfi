@@ -713,6 +713,33 @@ test('multiple products can share a role through native selectors without duplic
   assert.equal(removed,0);assert.equal(roles.get('111')?.has('789'),true);
 });
 
+test('one product grants multiple roles and removing a mapping preserves its other role until refund',async()=>{
+  await db.panels.updateOne({_id:panel._id},{$set:{'mappings.0.variant':null}});
+  await db.catalog.insertOne({_id:'catalog-product',storeId:'store',productId:'product',name:'Product',membership:false,licensed:true,variants:[],fetchedAt:new Date()});
+  const h=ui();
+  for(const roleId of ['790','790']) {
+    await (await h.interactions.prepare(await h.action('product-selected',{data:{values:['catalog-product']}}))).work!();
+    assert.match(h.view().copy,/alongside this product’s existing roles/);
+    const selector=h.view().controls.find(c=>c.type===6);
+    await (await h.interactions.prepare(h.input({type:3,message:{id:'private',flags:MessageFlags.Ephemeral},data:{custom_id:selector.custom_id,values:[roleId]}}))).work!();
+  }
+  const current=await service.panel(panel._id);
+  assert.deepEqual(current.mappings.map(m=>m.roleId).sort(),['789','790']);
+  await service.claim(current,'111',entitlement());
+  await service.reconcile(await memberOf('111'));
+  assert.deepEqual([...(roles.get('111')??[])].sort(),['789','790']);
+  const mapping=current.mappings.find(m=>m.roleId==='790')!;
+  await (await h.interactions.prepare(await h.action('remove-confirm',{}, {mapping:JSON.stringify(mapping),page:'0'}))).work!();
+  await service.reconcile(await memberOf('111'));
+  assert.deepEqual([...(roles.get('111')??[])],['789']);
+  await service.addMapping(await service.panel(panel._id),mapping);
+  await service.reconcile(await memberOf('111'));
+  assert.deepEqual([...(roles.get('111')??[])].sort(),['789','790']);
+  await db.claims.updateOne({_id:await secrets.hash('claim','store','license:one')},{$set:{eligibility:'ineligible'}});
+  await db.dirty('456',await guildOf('111'));await service.reconcile(await memberOf('111'));
+  assert.equal(roles.get('111')?.size,0);
+});
+
 test('native product autocomplete is creator-scoped and the role option can reuse a mapped role',async()=>{
   const h=ui();
   await db.catalog.insertMany([
