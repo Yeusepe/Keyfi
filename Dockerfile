@@ -11,6 +11,7 @@ COPY src ./src
 RUN npm run build && npm prune --omit=dev --ignore-scripts
 
 FROM base
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 ENV NODE_ENV=production PORT=8080
 WORKDIR /app
 COPY --from=build --chown=node:node /app/package.json ./
