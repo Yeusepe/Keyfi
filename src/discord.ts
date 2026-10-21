@@ -109,6 +109,7 @@ export function errorCopy(code: string): string {
     deleting: 'Your data deletion is in progress. Access must be removed before you can verify again.',
     expired: '## Action expired\nReturn to the creator’s verification message, or run the command again.',
     admin_required: 'You need Manage Server permission to configure verification.', role_unassignable: 'Choose a role below both your highest role and the bot’s, without moderator or server-management permissions. You and the bot both need Manage Roles.',
+    guild_unavailable: 'Keyfi can’t access this server or channel. Ask a server administrator to add Keyfi as a server bot with View Channels, Send Messages and Manage Roles, then run /keyfi setup again.',
     index_pending: 'Gumroad account verification is still preparing. You can enter a license key now.',
     discord_identity_mismatch: 'Sign in with the same Discord account that started verification.',
     oauth_not_configured: 'Gumroad sign-in is unavailable. Use a license key, or contact the creator.',
