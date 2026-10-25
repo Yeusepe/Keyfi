@@ -6,6 +6,8 @@ permissions:
   contents: read
 jobs:
   verify:
+    env:
+      MONGOMS_VERSION: 8.0.34
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -15,6 +17,14 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run check
+      - name: Use the production MongoDB binary for integration tests
+        shell: bash
+        run: |
+          docker create --name mongo-test-binary mongo:8.0.34
+          docker cp mongo-test-binary:/usr/bin/mongod "$RUNNER_TEMP/mongod"
+          docker rm mongo-test-binary
+          chmod +x "$RUNNER_TEMP/mongod"
+          echo "MONGOMS_SYSTEM_BINARY=$RUNNER_TEMP/mongod" >> "$GITHUB_ENV"
       - run: npm test
       - run: npm run build
       - run: npm audit --omit=dev
