@@ -3,7 +3,7 @@ FROM ghcr.io/yeusepe/coolify@sha256:12706b98d3df0a94bf7ff887120962d298c5e28ead1b
 FROM mongo:8.0.34
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=mongosh /usr/local/bin/node /usr/local/bin/node
-COPY --from=mongosh /tmp/mongosh-security/node_modules/mongosh /opt/mongosh
+COPY --from=mongosh /usr/local/lib/node_modules/mongosh /opt/mongosh
 # Keep MongoDB and mongosh versions stable while using the patched shell dependency tree.
 RUN rm /usr/bin/mongosh && ln -s /opt/mongosh/bin/mongosh.js /usr/bin/mongosh && \
     mongosh --nodb --quiet --eval 'if (process.version !== "v24.22.1" || require("zlib").constants.BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH !== -17) throw new Error("Unpatched Mongo shell runtime")'
