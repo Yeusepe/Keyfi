@@ -6,6 +6,9 @@ permissions:
   contents: read
 jobs:
   verify:
+    env:
+      MONGOMS_VERSION: 8.0.34
+      MONGOMS_DOWNLOAD_MAX_RETRIES: 5
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
