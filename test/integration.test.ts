@@ -37,7 +37,7 @@ const memberOf=async(discordId:string,guildId='456')=>`${guildId}:${await guildO
 const finishAll=async()=>{for(const d of await service.pendingDeletions(100))await service.finishDeletion(d._id);};
 const entitlement=():Entitlement=>({provider:'gumroad',storeId:'store',ownerId:'creator',entitlementId:'license:one',referenceId:'sale-1',productId:'product',membership:false,eligibility:'eligible',checkedAt:new Date()});
 before(async()=>{
-  mongo=await MongoMemoryReplSet.create({binary:{version:'8.0.16'},replSet:{count:1,storageEngine:'wiredTiger'}});
+  mongo=await MongoMemoryReplSet.create({binary:{version:process.env.MONGOMS_VERSION||'8.0.34'},replSet:{count:1,storageEngine:'wiredTiger'}});
   client=await new MongoClient(mongo.getUri()).connect(); db=new Database(client,'keyfi_test');await db.initialize();
   secrets=await createSecrets(client,'keyfi_test','07'.repeat(32));store.credential=await secrets.seal('secret','store');
 },{timeout:300_000});
