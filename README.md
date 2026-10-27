@@ -1,4 +1,4 @@
-# Keyfi
+![# Keyfi](https://github.com/user-attachments/assets/6f4956c3-5eed-4979-8be7-6268a360e2bf)
 
 A Discord bot that gives buyers roles after verifying a Gumroad, Jinxxy, or Payhip purchase.
 
